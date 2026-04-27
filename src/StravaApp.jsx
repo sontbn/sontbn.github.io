@@ -16,10 +16,22 @@ function loadCache() {
   try { return JSON.parse(localStorage.getItem('strava_cache')) || {} }
   catch { return {} }
 }
-function getCachedClub(clubId) {
+
+// Returns cached entry only if TODAY and FULLY complete (activities + insights)
+function getCompleteCache(clubId) {
   const c = loadCache()[String(clubId)]
-  return c?.date === todayStr() ? c : null
+  if (!c || c.date !== todayStr()) return null
+  const hasActivities = (c.activities?.length ?? 0) > 0
+  const hasInsights = Object.keys(c.insights || {}).length > 0
+  return (hasActivities && hasInsights) ? c : null
 }
+
+// Returns cached entry if today, regardless of completeness
+function getPartialCache(clubId) {
+  const c = loadCache()[String(clubId)]
+  return (c?.date === todayStr()) ? c : null
+}
+
 function setCachedClub(clubId, payload) {
   const cache = loadCache()
   cache[String(clubId)] = { date: todayStr(), ...payload }
@@ -134,21 +146,15 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     return res.json()
   }, [tokens.refreshToken, refreshAccessToken])
 
-  // ── Insight runner (standalone, callable anytime) ──
-  const runInsights = useCallback(async (acts, club) => {
-    if (!getAnthropicKey()) return
+  // ── Fetch insights from Claude and save to cache ──
+  const fetchInsights = useCallback(async (acts, mems, club) => {
     const lb = buildLeaderboard(acts)
     if (lb.length === 0) return
     setInsightsLoading(true)
     try {
       const ins = await generateInsights(lb)
       setInsights(ins)
-      const cached = getCachedClub(club.id)
-      setCachedClub(club.id, {
-        activities: cached?.activities || acts,
-        members: cached?.members || [],
-        insights: ins,
-      })
+      setCachedClub(club.id, { activities: acts, members: mems, insights: ins })
     } catch (e) {
       console.warn('Insight error:', e)
     } finally {
@@ -156,21 +162,35 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     }
   }, [])
 
-  // ── Load club (cache-aware) ──
+  // ── Load club data ──
+  // Strategy:
+  //   complete cache (activities + insights) → show instantly, no API call
+  //   partial cache  (activities only)       → show activities, re-call Claude
+  //   no cache                               → fetch Strava + call Claude
   const loadClub = useCallback(async (club, at) => {
-    const cached = getCachedClub(club.id)
-    if (cached) {
-      setActivities(cached.activities)
-      setMembers(cached.members)
-      setInsights(cached.insights || {})
+    // 1. Complete cache hit → fully from cache
+    const complete = getCompleteCache(club.id)
+    if (complete) {
+      setActivities(complete.activities)
+      setMembers(complete.members)
+      setInsights(complete.insights)
       setCacheHit(true)
-      return {
-        acts: cached.activities,
-        mems: cached.members,
-        insightsAlreadyCached: Object.keys(cached.insights || {}).length > 0,
-      }
+      return
     }
+
     setCacheHit(false)
+
+    // 2. Partial cache → use cached Strava data, only re-call Claude
+    const partial = getPartialCache(club.id)
+    if (partial?.activities?.length > 0) {
+      setActivities(partial.activities)
+      setMembers(partial.members || [])
+      setInsights({})
+      await fetchInsights(partial.activities, partial.members || [], club)
+      return
+    }
+
+    // 3. Full cache miss → fetch everything
     const [actsRes, memsRes] = await Promise.allSettled([
       stravaGet(`/clubs/${club.id}/activities?per_page=50`, at),
       stravaGet(`/clubs/${club.id}/members?per_page=100`, at),
@@ -180,9 +200,10 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     const mems = memsRes.status === 'fulfilled' ? memsRes.value : []
     setActivities(acts)
     setMembers(mems)
+    // Save Strava data first so partial cache exists even if Claude fails
     setCachedClub(club.id, { activities: acts, members: mems, insights: {} })
-    return { acts, mems, insightsAlreadyCached: false }
-  }, [stravaGet])
+    await fetchInsights(acts, mems, club)
+  }, [stravaGet, fetchInsights])
 
   // ── Init ──
   useEffect(() => {
@@ -194,10 +215,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
         setClubs(clubList)
         if (clubList.length > 0) {
           setSelectedClub(clubList[0])
-          const result = await loadClub(clubList[0], tokens.accessToken)
-          if (!result.insightsAlreadyCached) {
-            runInsights(result.acts, clubList[0])
-          }
+          await loadClub(clubList[0], tokens.accessToken)
         }
       } catch (e) {
         setError(e.message)
@@ -215,10 +233,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     setInsights({})
     setLoading(true)
     try {
-      const result = await loadClub(club, tokens.accessToken)
-      if (!result.insightsAlreadyCached) {
-        runInsights(result.acts, club)
-      }
+      await loadClub(club, tokens.accessToken)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -226,7 +241,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     }
   }
 
-  // ── Save API key → immediately regenerate insights ──
+  // ── Save API key → clear insight cache → re-generate ──
   const saveKey = async () => {
     const k = keyDraft.trim()
     if (!k) return
@@ -234,9 +249,11 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     setKeyDraft('')
     setShowKeyInput(false)
     if (selectedClub) {
-      const cached = getCachedClub(selectedClub.id)
-      if (cached) setCachedClub(selectedClub.id, { ...cached, insights: {} })
-      runInsights(activities, selectedClub)
+      const partial = getPartialCache(selectedClub.id)
+      const acts = partial?.activities || activities
+      const mems = partial?.members || members
+      setCachedClub(selectedClub.id, { activities: acts, members: mems, insights: {} })
+      await fetchInsights(acts, mems, selectedClub)
     }
   }
 
