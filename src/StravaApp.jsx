@@ -7,13 +7,31 @@ const INITIAL_TOKENS = {
   refreshToken: '9ccdee4fb1413fde0a3fa2972308f8d0a50d4578',
 }
 
-const getAnthropicKey = () => localStorage.getItem('anthropic_key') || ''
+const memoryStorage = new Map()
+
+function getStorageValue(key) {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return memoryStorage.get(key) ?? null
+  }
+}
+
+function setStorageValue(key, value) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    memoryStorage.set(key, value)
+  }
+}
+
+const getAnthropicKey = () => getStorageValue('anthropic_key') || ''
 
 // ── Cache helpers ─────────────────────────────────────────────
 const todayStr = () => new Date().toISOString().slice(0, 10)
 
 function loadCache() {
-  try { return JSON.parse(localStorage.getItem('strava_cache')) || {} }
+  try { return JSON.parse(getStorageValue('strava_cache')) || {} }
   catch { return {} }
 }
 
@@ -35,7 +53,7 @@ function getPartialCache(clubId) {
 function setCachedClub(clubId, payload) {
   const cache = loadCache()
   cache[String(clubId)] = { date: todayStr(), ...payload }
-  localStorage.setItem('strava_cache', JSON.stringify(cache))
+  setStorageValue('strava_cache', JSON.stringify(cache))
 }
 
 // ── Formatters ────────────────────────────────────────────────
@@ -50,10 +68,23 @@ function fmtDate(d) {
   return new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
 }
 
+function buildLeaderboard(acts) {
+  return Object.values(
+    (acts || []).reduce((acc, act) => {
+      const key = `${act.athlete.firstname} ${act.athlete.lastname}`
+      if (!acc[key]) acc[key] = { name: key, dist: 0, time: 0, runs: 0 }
+      acc[key].dist += act.distance
+      acc[key].time += act.moving_time
+      acc[key].runs += 1
+      return acc
+    }, {})
+  ).sort((a, b) => b.dist - a.dist)
+}
+
 // ── Claude insight generator ──────────────────────────────────
 async function generateInsights(leaderboard) {
   const key = getAnthropicKey()
-  if (!key) return {}
+  if (!key) throw new Error('Anthropic API key belum disimpan')
 
   const lines = leaderboard.map((r, i) =>
     `${i + 1}. ${r.name}: total ${(r.dist/1000).toFixed(1)}km, ${r.runs}x lari, avg ${(r.dist/r.runs/1000).toFixed(1)}km/sesi, total waktu ${fmtTime(r.time)}`
@@ -61,12 +92,12 @@ async function generateInsights(leaderboard) {
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-allow-browser': 'true',
-    },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1024,
@@ -85,9 +116,10 @@ Balas HANYA dengan JSON object: {"Nama Pelari": "kalimat insight", ...}`,
 
   if (!res.ok) throw new Error(`Claude API ${res.status}`)
   const data = await res.json()
-  const text = data.content[0].text.trim()
+  const text = data?.content?.map(part => part?.text ?? '').join('\n').trim() || ''
   const match = text.match(/\{[\s\S]*\}/)
-  return match ? JSON.parse(match[0]) : {}
+  if (!match) throw new Error('Respons Claude tidak berisi JSON')
+  return JSON.parse(match[0])
 }
 
 // ── Main component ────────────────────────────────────────────
@@ -108,6 +140,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   const [cacheHit, setCacheHit] = useState(false)
   const [showKeyInput, setShowKeyInput] = useState(false)
   const [keyDraft, setKeyDraft] = useState('')
+  const [insightError, setInsightError] = useState('')
 
   // Case-insensitive insight lookup — guards against Claude changing capitalisation
   const getInsight = (name) => {
@@ -151,12 +184,16 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     const lb = buildLeaderboard(acts)
     if (lb.length === 0) return
     setInsightsLoading(true)
+    setInsightError('')
     try {
       const ins = await generateInsights(lb)
       setInsights(ins)
       setCachedClub(club.id, { activities: acts, members: mems, insights: ins })
     } catch (e) {
       console.warn('Insight error:', e)
+      setInsightError(e?.message || 'Gagal mengambil insight AI')
+      setInsights({})
+      setCachedClub(club.id, { activities: acts, members: mems, insights: {} })
     } finally {
       setInsightsLoading(false)
     }
@@ -174,6 +211,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
       setActivities(complete.activities)
       setMembers(complete.members)
       setInsights(complete.insights)
+      setInsightError('')
       setCacheHit(true)
       return
     }
@@ -186,6 +224,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
       setActivities(partial.activities)
       setMembers(partial.members || [])
       setInsights({})
+      setInsightError('')
       await fetchInsights(partial.activities, partial.members || [], club)
       return
     }
@@ -200,12 +239,15 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     const mems = memsRes.status === 'fulfilled' ? memsRes.value : []
     setActivities(acts)
     setMembers(mems)
+    setInsightError('')
     // Save Strava data first so partial cache exists even if Claude fails
     setCachedClub(club.id, { activities: acts, members: mems, insights: {} })
     await fetchInsights(acts, mems, club)
   }, [stravaGet, fetchInsights])
 
   // ── Init ──
+  // Intentionally run once on mount; subsequent token refreshes are handled
+  // inside the Strava request helpers.
   useEffect(() => {
     async function init() {
       setLoading(true)
@@ -224,7 +266,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
       }
     }
     init()
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Switch club ──
   const handleSelectClub = async (club) => {
@@ -245,7 +287,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   const saveKey = async () => {
     const k = keyDraft.trim()
     if (!k) return
-    localStorage.setItem('anthropic_key', k)
+    setStorageValue('anthropic_key', k)
     setKeyDraft('')
     setShowKeyInput(false)
     if (selectedClub) {
@@ -255,20 +297,6 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
       setCachedClub(selectedClub.id, { activities: acts, members: mems, insights: {} })
       await fetchInsights(acts, mems, selectedClub)
     }
-  }
-
-  // ── Leaderboard builder ──
-  function buildLeaderboard(acts) {
-    return Object.values(
-      (acts || []).reduce((acc, act) => {
-        const key = `${act.athlete.firstname} ${act.athlete.lastname}`
-        if (!acc[key]) acc[key] = { name: key, dist: 0, time: 0, runs: 0 }
-        acc[key].dist += act.distance
-        acc[key].time += act.moving_time
-        acc[key].runs += 1
-        return acc
-      }, {})
-    ).sort((a, b) => b.dist - a.dist)
   }
 
   const leaderboard = buildLeaderboard(activities)
@@ -339,6 +367,13 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
             </div>
             <span className="text-orange-400 text-xs">→</span>
           </button>
+        )}
+
+        {insightError && !loading && (
+          <div className="w-full mb-4 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-2xl p-3">
+            <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">AI Insights gagal dimuat</p>
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">{insightError}</p>
+          </div>
         )}
 
         {/* Club selector */}
