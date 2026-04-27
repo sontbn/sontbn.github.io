@@ -15,7 +15,7 @@ const CARDS = [
     desc: 'Pantau aktivitas & lari',
     color: 'from-orange-500 to-orange-600',
     shadow: 'shadow-orange-200 dark:shadow-orange-900',
-    available: false,
+    available: true,
   },
 ]
 

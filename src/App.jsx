@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Home from './Home'
 import TodoApp from './TodoApp'
+import StravaApp from './StravaApp'
 
 export default function App() {
   const [view, setView] = useState('home')
@@ -21,6 +22,13 @@ export default function App() {
       )}
       {view === 'todo' && (
         <TodoApp
+          dark={dark}
+          onToggleDark={toggleDark}
+          onBack={() => setView('home')}
+        />
+      )}
+      {view === 'strava' && (
+        <StravaApp
           dark={dark}
           onToggleDark={toggleDark}
           onBack={() => setView('home')}
