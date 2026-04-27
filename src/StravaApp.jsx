@@ -65,6 +65,7 @@ async function generateInsights(leaderboard) {
 Data pelari:
 ${lines}
 
+PENTING: Gunakan nama persis sama (sama persis huruf kapital/kecilnya) seperti di data sebagai key JSON.
 Balas HANYA dengan JSON object: {"Nama Pelari": "kalimat insight", ...}`,
       }],
     }),
@@ -95,6 +96,14 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   const [cacheHit, setCacheHit] = useState(false)
   const [showKeyInput, setShowKeyInput] = useState(false)
   const [keyDraft, setKeyDraft] = useState('')
+
+  // Case-insensitive insight lookup — guards against Claude changing capitalisation
+  const getInsight = (name) => {
+    if (!name) return null
+    const lower = name.toLowerCase().trim()
+    const entry = Object.entries(insights).find(([k]) => k.toLowerCase().trim() === lower)
+    return entry?.[1] || null
+  }
 
   // ── Strava API ──
   const refreshAccessToken = useCallback(async (rt) => {
@@ -394,8 +403,8 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                         <p className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">{r.name}</p>
                         {insightsLoading ? (
                           <p className="text-xs text-orange-300 dark:text-orange-700 mt-0.5 italic">✦ Menganalisis...</p>
-                        ) : insights[r.name] ? (
-                          <p className="text-xs text-orange-500 dark:text-orange-400 mt-0.5 italic leading-snug">✦ {insights[r.name]}</p>
+                        ) : getInsight(r.name) ? (
+                          <p className="text-xs text-orange-500 dark:text-orange-400 mt-0.5 italic leading-snug">✦ {getInsight(r.name)}</p>
                         ) : null}
                         <p className="text-xs text-gray-400 mt-1">
                           {r.runs}x lari · avg {(r.dist / r.runs / 1000).toFixed(1)} km/sesi
