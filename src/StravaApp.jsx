@@ -173,7 +173,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   const [insights, setInsights] = useState({})
   const [insightsLoading, setInsightsLoading] = useState(false)
   const [tab, setTab] = useState('leaderboard')
-  const [period, setPeriod] = useState('month')
+  const [period, setPeriod] = useState('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [cacheHit, setCacheHit] = useState(false)
@@ -536,27 +536,8 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
         {!loading && !error && (
           <>
-            {/* Period selector */}
-            <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-2xl p-1 mb-3">
-              {[
-                { id: 'week', label: 'Minggu' },
-                { id: 'month', label: 'Bulan' },
-                { id: 'year', label: 'Tahun' },
-                { id: 'all', label: 'Semua' },
-              ].map(p => (
-                <button key={p.id} onClick={() => setPeriod(p.id)}
-                  className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-all ${
-                    period === p.id
-                      ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-                      : 'text-gray-500 dark:text-gray-400'
-                  }`}>
-                  {p.label}
-                </button>
-              ))}
-            </div>
-
             {/* Stats */}
-            <div className="grid grid-cols-3 gap-3 mb-5">
+            <div className="grid grid-cols-3 gap-3 mb-3">
               {[
                 { label: 'Pelari', value: leaderboard.length },
                 { label: 'Aktivitas', value: filteredActs.length },
@@ -566,6 +547,25 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                   <p className="text-2xl font-bold text-orange-500 leading-none mb-1">{s.value}</p>
                   <p className="text-xs text-orange-400 font-medium">{s.label}</p>
                 </div>
+              ))}
+            </div>
+
+            {/* Period selector */}
+            <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-2xl p-1 mb-5">
+              {[
+                { id: 'all', label: 'Semua' },
+                { id: 'week', label: 'Minggu' },
+                { id: 'month', label: 'Bulan' },
+                { id: 'year', label: 'Tahun' },
+              ].map(p => (
+                <button key={p.id} onClick={() => setPeriod(p.id)}
+                  className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                    period === p.id
+                      ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                      : 'text-gray-500 dark:text-gray-400'
+                  }`}>
+                  {p.label}
+                </button>
               ))}
             </div>
 
