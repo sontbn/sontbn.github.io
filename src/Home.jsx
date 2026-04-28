@@ -17,6 +17,15 @@ const CARDS = [
     shadow: 'shadow-orange-200 dark:shadow-orange-900',
     available: true,
   },
+  {
+    id: 'survei',
+    icon: '📋',
+    title: 'Survei Monitoring',
+    desc: 'Pantau & isi survei monitoring',
+    color: 'from-emerald-500 to-emerald-600',
+    shadow: 'shadow-emerald-200 dark:shadow-emerald-900',
+    available: false,
+  },
 ]
 
 export default function Home({ onOpen, dark, onToggleDark }) {
