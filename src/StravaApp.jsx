@@ -69,6 +69,35 @@ function fmtDate(d) {
   return new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
 }
 
+function periodCutoff(period) {
+  const now = new Date()
+  if (period === 'week') {
+    const c = new Date(now)
+    const dow = now.getDay()
+    const back = dow === 0 ? 6 : dow - 1
+    c.setDate(now.getDate() - back)
+    c.setHours(0, 0, 0, 0)
+    return c
+  }
+  if (period === 'month') return new Date(now.getFullYear(), now.getMonth(), 1)
+  if (period === 'year') return new Date(now.getFullYear(), 0, 1)
+  return null
+}
+
+function filterByPeriod(acts, period) {
+  const cutoff = periodCutoff(period)
+  if (!cutoff) return acts
+  return (acts || []).filter(a => new Date(a.start_date_local) >= cutoff)
+}
+
+function periodLabel(period) {
+  const now = new Date()
+  if (period === 'week') return 'Minggu ini'
+  if (period === 'month') return now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })
+  if (period === 'year') return `Tahun ${now.getFullYear()}`
+  return 'Semua data'
+}
+
 function buildLeaderboard(acts) {
   return Object.values(
     (acts || []).reduce((acc, act) => {
@@ -144,6 +173,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   const [insights, setInsights] = useState({})
   const [insightsLoading, setInsightsLoading] = useState(false)
   const [tab, setTab] = useState('leaderboard')
+  const [period, setPeriod] = useState('month')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [cacheHit, setCacheHit] = useState(false)
@@ -355,9 +385,14 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     }
   }
 
-  const leaderboard = buildLeaderboard(activities)
+  const filteredActs = filterByPeriod(activities, period)
+  const leaderboard = buildLeaderboard(filteredActs)
   const medals = ['🥇', '🥈', '🥉']
   const hasKey = !!getAnthropicKey()
+  const totalDist = filteredActs.reduce((s, a) => s + a.distance, 0)
+  const totalTime = filteredActs.reduce((s, a) => s + a.moving_time, 0)
+  const totalElev = filteredActs.reduce((s, a) => s + (a.total_elevation_gain || 0), 0)
+  const longestRun = filteredActs.reduce((m, a) => Math.max(m, a.distance), 0)
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors duration-300">
@@ -501,12 +536,31 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
         {!loading && !error && (
           <>
+            {/* Period selector */}
+            <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-2xl p-1 mb-3">
+              {[
+                { id: 'week', label: 'Minggu' },
+                { id: 'month', label: 'Bulan' },
+                { id: 'year', label: 'Tahun' },
+                { id: 'all', label: 'Semua' },
+              ].map(p => (
+                <button key={p.id} onClick={() => setPeriod(p.id)}
+                  className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                    period === p.id
+                      ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                      : 'text-gray-500 dark:text-gray-400'
+                  }`}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
             {/* Stats */}
             <div className="grid grid-cols-3 gap-3 mb-5">
               {[
-                { label: 'Anggota', value: members.length || selectedClub?.member_count || '-' },
-                { label: 'Aktivitas', value: activities.length },
-                { label: 'Total KM', value: Math.round(activities.reduce((s, a) => s + a.distance, 0) / 1000) },
+                { label: 'Pelari', value: leaderboard.length },
+                { label: 'Aktivitas', value: filteredActs.length },
+                { label: 'Total KM', value: Math.round(totalDist / 1000) },
               ].map(s => (
                 <div key={s.label} className="bg-orange-50 dark:bg-orange-950 rounded-2xl p-3 text-center">
                   <p className="text-2xl font-bold text-orange-500 leading-none mb-1">{s.value}</p>
@@ -517,7 +571,11 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
             {/* Tabs */}
             <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-2xl p-1 mb-4">
-              {[{ id: 'leaderboard', label: '🏆 Leaderboard' }, { id: 'activities', label: '🕐 Aktivitas' }].map(t => (
+              {[
+                { id: 'leaderboard', label: '🏆 Leaderboard' },
+                { id: 'recap', label: '📊 Rekap' },
+                { id: 'activities', label: '🕐 Aktivitas' },
+              ].map(t => (
                 <button key={t.id} onClick={() => setTab(t.id)}
                   className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${
                     tab === t.id
@@ -564,16 +622,75 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
               )
             )}
 
+            {/* Recap */}
+            {tab === 'recap' && (
+              <div className="space-y-3">
+                <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3">
+                  <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-400">Periode</p>
+                  <p className="text-base font-bold text-gray-800 dark:text-gray-100 mt-0.5 capitalize">
+                    {periodLabel(period)}
+                  </p>
+                  {period === 'year' && (
+                    <p className="text-xs text-amber-500 dark:text-amber-400 mt-1.5 leading-snug">
+                      ⚠ Strava hanya menyediakan ~30 hari aktivitas club terbaru, jadi rekap tahunan terbatas pada data yang tersedia.
+                    </p>
+                  )}
+                </div>
+
+                {filteredActs.length === 0 ? (
+                  <div className="text-center py-10 text-gray-400">
+                    <p className="text-4xl mb-3">🏃</p>
+                    <p className="text-sm">Belum ada aktivitas pada periode ini</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        { label: 'Total Jarak', value: `${(totalDist/1000).toFixed(1)} km` },
+                        { label: 'Total Durasi', value: fmtTime(totalTime) },
+                        { label: 'Pelari Aktif', value: leaderboard.length },
+                        { label: 'Total Aktivitas', value: filteredActs.length },
+                        { label: 'Avg / Pelari', value: leaderboard.length ? `${(totalDist/leaderboard.length/1000).toFixed(1)} km` : '-' },
+                        { label: 'Lari Terjauh', value: `${(longestRun/1000).toFixed(1)} km` },
+                        { label: 'Avg / Sesi', value: filteredActs.length ? `${(totalDist/filteredActs.length/1000).toFixed(1)} km` : '-' },
+                        { label: 'Total Elev.', value: `${Math.round(totalElev)} m` },
+                      ].map(s => (
+                        <div key={s.label} className="bg-orange-50 dark:bg-orange-950 rounded-2xl p-3 text-center">
+                          <p className="text-lg font-bold text-orange-500 leading-tight mb-1">{s.value}</p>
+                          <p className="text-xs text-orange-400 font-medium">{s.label}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {leaderboard.length > 0 && (
+                      <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3">
+                        <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-400 mb-2">Top 3 Pelari</p>
+                        <div className="space-y-2">
+                          {leaderboard.slice(0, 3).map((r, i) => (
+                            <div key={r.name} className="flex items-center gap-3">
+                              <span className="text-lg w-6 text-center flex-shrink-0">{medals[i]}</span>
+                              <p className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{r.name}</p>
+                              <p className="text-sm font-bold text-orange-500 flex-shrink-0">{(r.dist/1000).toFixed(1)} km</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
             {/* Activities */}
             {tab === 'activities' && (
-              activities.length === 0 ? (
+              filteredActs.length === 0 ? (
                 <div className="text-center py-12 text-gray-400">
                   <p className="text-4xl mb-3">🏃</p>
-                  <p className="text-sm">Belum ada aktivitas lari</p>
+                  <p className="text-sm">Belum ada aktivitas pada periode ini</p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {activities.map((act, i) => (
+                  {filteredActs.map((act, i) => (
                     <div key={i} className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3">
                       <div className="flex items-center justify-between mb-0.5">
                         <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">
