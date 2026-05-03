@@ -98,6 +98,12 @@ function periodLabel(period) {
   return 'Semua data'
 }
 
+function dateRange(acts) {
+  if (!acts || acts.length === 0) return null
+  const times = acts.map(a => new Date(a.start_date_local).getTime())
+  return { from: new Date(Math.min(...times)), to: new Date(Math.max(...times)) }
+}
+
 function buildLeaderboard(acts) {
   return Object.values(
     (acts || []).reduce((acc, act) => {
@@ -274,7 +280,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
     // 3. Full cache miss → fetch everything
     const [actsRes, memsRes] = await Promise.allSettled([
-      stravaGet(`/clubs/${club.id}/activities?per_page=50`, at),
+      stravaGet(`/clubs/${club.id}/activities?per_page=200`, at),
       stravaGet(`/clubs/${club.id}/members?per_page=100`, at),
     ])
     const acts = (actsRes.status === 'fulfilled' ? actsRes.value : [])
@@ -297,7 +303,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     setCacheHit(false)
     try {
       const [actsRes, memsRes] = await Promise.allSettled([
-        stravaGet(`/clubs/${selectedClub.id}/activities?per_page=50`, tokens.accessToken),
+        stravaGet(`/clubs/${selectedClub.id}/activities?per_page=200`, tokens.accessToken),
         stravaGet(`/clubs/${selectedClub.id}/members?per_page=100`, tokens.accessToken),
       ])
       const acts = (actsRes.status === 'fulfilled' ? actsRes.value : [])
@@ -595,30 +601,43 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                   <p className="text-sm">Belum ada data lari dari club ini</p>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {leaderboard.map((r, i) => (
-                    <div key={r.name} className="flex items-start gap-3 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3.5">
-                      <span className="text-xl w-7 text-center flex-shrink-0 mt-0.5">
-                        {medals[i] ?? <span className="text-sm font-bold text-gray-300 dark:text-gray-600">{i + 1}</span>}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">{r.name}</p>
-                        {insightsLoading ? (
-                          <p className="text-xs text-orange-300 dark:text-orange-700 mt-0.5 italic">✦ Menganalisis...</p>
-                        ) : getInsight(r.name) ? (
-                          <p className="text-xs text-orange-500 dark:text-orange-400 mt-0.5 italic leading-snug">✦ {getInsight(r.name)}</p>
-                        ) : null}
-                        <p className="text-xs text-gray-400 mt-1">
-                          {r.runs}x lari · avg {(r.dist / r.runs / 1000).toFixed(1)} km/sesi
-                        </p>
+                <>
+                  {(() => {
+                    const range = dateRange(filteredActs)
+                    return range && (
+                      <div className="mb-3 px-3 py-2 rounded-xl bg-orange-50 dark:bg-orange-950/40 border border-orange-100 dark:border-orange-900 text-xs text-orange-600 dark:text-orange-300 flex items-center gap-2">
+                        <span>📅</span>
+                        <span>
+                          {periodLabel(period)} · <strong>{fmtDate(range.from)} – {fmtDate(range.to)}</strong>
+                        </span>
                       </div>
-                      <div className="text-right flex-shrink-0">
-                        <p className="text-sm font-bold text-orange-500">{(r.dist / 1000).toFixed(1)} km</p>
-                        <p className="text-xs text-gray-400">{fmtTime(r.time)}</p>
+                    )
+                  })()}
+                  <div className="space-y-2">
+                    {leaderboard.map((r, i) => (
+                      <div key={r.name} className="flex items-start gap-3 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3.5">
+                        <span className="text-xl w-7 text-center flex-shrink-0 mt-0.5">
+                          {medals[i] ?? <span className="text-sm font-bold text-gray-300 dark:text-gray-600">{i + 1}</span>}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">{r.name}</p>
+                          {insightsLoading ? (
+                            <p className="text-xs text-orange-300 dark:text-orange-700 mt-0.5 italic">✦ Menganalisis...</p>
+                          ) : getInsight(r.name) ? (
+                            <p className="text-xs text-orange-500 dark:text-orange-400 mt-0.5 italic leading-snug">✦ {getInsight(r.name)}</p>
+                          ) : null}
+                          <p className="text-xs text-gray-400 mt-1">
+                            {r.runs}x lari · avg {(r.dist / r.runs / 1000).toFixed(1)} km/sesi
+                          </p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-sm font-bold text-orange-500">{(r.dist / 1000).toFixed(1)} km</p>
+                          <p className="text-xs text-gray-400">{fmtTime(r.time)}</p>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                </>
               )
             )}
 
