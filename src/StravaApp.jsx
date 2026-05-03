@@ -84,10 +84,23 @@ function periodCutoff(period) {
   return null
 }
 
+// Strava's /clubs/{id}/activities endpoint omits start_date_local entirely,
+// so any date-based logic must degrade gracefully when the field is missing.
+function hasDates(acts) {
+  return (acts || []).some(a => {
+    if (!a?.start_date_local) return false
+    return !Number.isNaN(new Date(a.start_date_local).getTime())
+  })
+}
+
 function filterByPeriod(acts, period) {
   const cutoff = periodCutoff(period)
   if (!cutoff) return acts
-  return (acts || []).filter(a => new Date(a.start_date_local) >= cutoff)
+  if (!hasDates(acts)) return acts
+  return (acts || []).filter(a => {
+    const t = new Date(a.start_date_local).getTime()
+    return !Number.isNaN(t) && t >= cutoff.getTime()
+  })
 }
 
 function periodLabel(period) {
@@ -100,7 +113,10 @@ function periodLabel(period) {
 
 function dateRange(acts) {
   if (!acts || acts.length === 0) return null
-  const times = acts.map(a => new Date(a.start_date_local).getTime())
+  const times = acts
+    .map(a => new Date(a.start_date_local).getTime())
+    .filter(t => !Number.isNaN(t))
+  if (times.length === 0) return null
   return { from: new Date(Math.min(...times)), to: new Date(Math.max(...times)) }
 }
 
@@ -603,8 +619,19 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
               ) : (
                 <>
                   {(() => {
+                    if (!hasDates(filteredActs)) {
+                      return (
+                        <div className="mb-3 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-100 dark:border-amber-900 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
+                          <span>⚠</span>
+                          <span>
+                            Strava club API tidak menyertakan tanggal aktivitas, jadi filter periode tidak bisa diterapkan. Menampilkan {filteredActs.length} aktivitas terbaru.
+                          </span>
+                        </div>
+                      )
+                    }
                     const range = dateRange(filteredActs)
-                    return range && (
+                    if (!range) return null
+                    return (
                       <div className="mb-3 px-3 py-2 rounded-xl bg-orange-50 dark:bg-orange-950/40 border border-orange-100 dark:border-orange-900 text-xs text-orange-600 dark:text-orange-300 flex items-center gap-2">
                         <span>📅</span>
                         <span>
@@ -715,7 +742,9 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                         <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">
                           {act.athlete.firstname} {act.athlete.lastname}
                         </p>
-                        <span className="text-xs text-gray-400 ml-2 flex-shrink-0">{fmtDate(act.start_date_local)}</span>
+                        {act.start_date_local && (
+                          <span className="text-xs text-gray-400 ml-2 flex-shrink-0">{fmtDate(act.start_date_local)}</span>
+                        )}
                       </div>
                       <p className="text-xs text-gray-400 mb-2 truncate">{act.name}</p>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
