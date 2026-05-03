@@ -69,21 +69,6 @@ function fmtDate(d) {
   return new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
 }
 
-function periodCutoff(period) {
-  const now = new Date()
-  if (period === 'week') {
-    const c = new Date(now)
-    const dow = now.getDay()
-    const back = dow === 0 ? 6 : dow - 1
-    c.setDate(now.getDate() - back)
-    c.setHours(0, 0, 0, 0)
-    return c
-  }
-  if (period === 'month') return new Date(now.getFullYear(), now.getMonth(), 1)
-  if (period === 'year') return new Date(now.getFullYear(), 0, 1)
-  return null
-}
-
 // Strava's /clubs/{id}/activities endpoint omits start_date_local entirely,
 // so any date-based logic must degrade gracefully when the field is missing.
 function hasDates(acts) {
@@ -91,24 +76,6 @@ function hasDates(acts) {
     if (!a?.start_date_local) return false
     return !Number.isNaN(new Date(a.start_date_local).getTime())
   })
-}
-
-function filterByPeriod(acts, period) {
-  const cutoff = periodCutoff(period)
-  if (!cutoff) return acts
-  if (!hasDates(acts)) return acts
-  return (acts || []).filter(a => {
-    const t = new Date(a.start_date_local).getTime()
-    return !Number.isNaN(t) && t >= cutoff.getTime()
-  })
-}
-
-function periodLabel(period) {
-  const now = new Date()
-  if (period === 'week') return 'Minggu ini'
-  if (period === 'month') return now.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })
-  if (period === 'year') return `Tahun ${now.getFullYear()}`
-  return 'Semua data'
 }
 
 function dateRange(acts) {
@@ -195,7 +162,6 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   const [insights, setInsights] = useState({})
   const [insightsLoading, setInsightsLoading] = useState(false)
   const [tab, setTab] = useState('leaderboard')
-  const [period, setPeriod] = useState('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [cacheHit, setCacheHit] = useState(false)
@@ -407,14 +373,13 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     }
   }
 
-  const filteredActs = filterByPeriod(activities, period)
-  const leaderboard = buildLeaderboard(filteredActs)
+  const leaderboard = buildLeaderboard(activities)
   const medals = ['🥇', '🥈', '🥉']
   const hasKey = !!getAnthropicKey()
-  const totalDist = filteredActs.reduce((s, a) => s + a.distance, 0)
-  const totalTime = filteredActs.reduce((s, a) => s + a.moving_time, 0)
-  const totalElev = filteredActs.reduce((s, a) => s + (a.total_elevation_gain || 0), 0)
-  const longestRun = filteredActs.reduce((m, a) => Math.max(m, a.distance), 0)
+  const totalDist = activities.reduce((s, a) => s + a.distance, 0)
+  const totalTime = activities.reduce((s, a) => s + a.moving_time, 0)
+  const totalElev = activities.reduce((s, a) => s + (a.total_elevation_gain || 0), 0)
+  const longestRun = activities.reduce((m, a) => Math.max(m, a.distance), 0)
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors duration-300">
@@ -559,35 +524,16 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
         {!loading && !error && (
           <>
             {/* Stats */}
-            <div className="grid grid-cols-3 gap-3 mb-3">
+            <div className="grid grid-cols-3 gap-3 mb-5">
               {[
                 { label: 'Pelari', value: leaderboard.length },
-                { label: 'Aktivitas', value: filteredActs.length },
+                { label: 'Aktivitas', value: activities.length },
                 { label: 'Total KM', value: Math.round(totalDist / 1000) },
               ].map(s => (
                 <div key={s.label} className="bg-orange-50 dark:bg-orange-950 rounded-2xl p-3 text-center">
                   <p className="text-2xl font-bold text-orange-500 leading-none mb-1">{s.value}</p>
                   <p className="text-xs text-orange-400 font-medium">{s.label}</p>
                 </div>
-              ))}
-            </div>
-
-            {/* Period selector */}
-            <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-2xl p-1 mb-5">
-              {[
-                { id: 'all', label: 'Semua' },
-                { id: 'week', label: 'Minggu' },
-                { id: 'month', label: 'Bulan' },
-                { id: 'year', label: 'Tahun' },
-              ].map(p => (
-                <button key={p.id} onClick={() => setPeriod(p.id)}
-                  className={`flex-1 py-1.5 rounded-xl text-xs font-medium transition-all ${
-                    period === p.id
-                      ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-                      : 'text-gray-500 dark:text-gray-400'
-                  }`}>
-                  {p.label}
-                </button>
               ))}
             </div>
 
@@ -619,23 +565,23 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
               ) : (
                 <>
                   {(() => {
-                    if (!hasDates(filteredActs)) {
+                    if (!hasDates(activities)) {
                       return (
                         <div className="mb-3 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-100 dark:border-amber-900 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
                           <span>⚠</span>
                           <span>
-                            Strava club API tidak menyertakan tanggal aktivitas, jadi filter periode tidak bisa diterapkan. Menampilkan {filteredActs.length} aktivitas terbaru.
+                            Strava club API tidak menyertakan tanggal aktivitas, jadi filter periode tidak bisa diterapkan. Menampilkan {activities.length} aktivitas terbaru.
                           </span>
                         </div>
                       )
                     }
-                    const range = dateRange(filteredActs)
+                    const range = dateRange(activities)
                     if (!range) return null
                     return (
                       <div className="mb-3 px-3 py-2 rounded-xl bg-orange-50 dark:bg-orange-950/40 border border-orange-100 dark:border-orange-900 text-xs text-orange-600 dark:text-orange-300 flex items-center gap-2">
                         <span>📅</span>
                         <span>
-                          {periodLabel(period)} · <strong>{fmtDate(range.from)} – {fmtDate(range.to)}</strong>
+                          {activities.length} aktivitas · <strong>{fmtDate(range.from)} – {fmtDate(range.to)}</strong>
                         </span>
                       </div>
                     )
@@ -671,22 +617,10 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
             {/* Recap */}
             {tab === 'recap' && (
               <div className="space-y-3">
-                <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3">
-                  <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-400">Periode</p>
-                  <p className="text-base font-bold text-gray-800 dark:text-gray-100 mt-0.5 capitalize">
-                    {periodLabel(period)}
-                  </p>
-                  {period === 'year' && (
-                    <p className="text-xs text-amber-500 dark:text-amber-400 mt-1.5 leading-snug">
-                      ⚠ Strava hanya menyediakan ~30 hari aktivitas club terbaru, jadi rekap tahunan terbatas pada data yang tersedia.
-                    </p>
-                  )}
-                </div>
-
-                {filteredActs.length === 0 ? (
+                {activities.length === 0 ? (
                   <div className="text-center py-10 text-gray-400">
                     <p className="text-4xl mb-3">🏃</p>
-                    <p className="text-sm">Belum ada aktivitas pada periode ini</p>
+                    <p className="text-sm">Belum ada aktivitas</p>
                   </div>
                 ) : (
                   <>
@@ -695,10 +629,10 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                         { label: 'Total Jarak', value: `${(totalDist/1000).toFixed(1)} km` },
                         { label: 'Total Durasi', value: fmtTime(totalTime) },
                         { label: 'Pelari Aktif', value: leaderboard.length },
-                        { label: 'Total Aktivitas', value: filteredActs.length },
+                        { label: 'Total Aktivitas', value: activities.length },
                         { label: 'Avg / Pelari', value: leaderboard.length ? `${(totalDist/leaderboard.length/1000).toFixed(1)} km` : '-' },
                         { label: 'Lari Terjauh', value: `${(longestRun/1000).toFixed(1)} km` },
-                        { label: 'Avg / Sesi', value: filteredActs.length ? `${(totalDist/filteredActs.length/1000).toFixed(1)} km` : '-' },
+                        { label: 'Avg / Sesi', value: activities.length ? `${(totalDist/activities.length/1000).toFixed(1)} km` : '-' },
                         { label: 'Total Elev.', value: `${Math.round(totalElev)} m` },
                       ].map(s => (
                         <div key={s.label} className="bg-orange-50 dark:bg-orange-950 rounded-2xl p-3 text-center">
@@ -729,14 +663,14 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
             {/* Activities */}
             {tab === 'activities' && (
-              filteredActs.length === 0 ? (
+              activities.length === 0 ? (
                 <div className="text-center py-12 text-gray-400">
                   <p className="text-4xl mb-3">🏃</p>
-                  <p className="text-sm">Belum ada aktivitas pada periode ini</p>
+                  <p className="text-sm">Belum ada aktivitas</p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {filteredActs.map((act, i) => (
+                  {activities.map((act, i) => (
                     <div key={i} className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3">
                       <div className="flex items-center justify-between mb-0.5">
                         <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">
