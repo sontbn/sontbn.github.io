@@ -184,6 +184,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   const [pinDraft, setPinDraft] = useState('')
   const [pinError, setPinError] = useState('')
   const [forceGetLoading, setForceGetLoading] = useState(false)
+  const [showMembers, setShowMembers] = useState(false)
 
   // Case-insensitive insight lookup — guards against Claude changing capitalisation
   const getInsight = (name) => {
@@ -640,19 +641,36 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                       {[
                         { label: 'Total Jarak', value: `${(totalDist/1000).toFixed(1)} km` },
                         { label: 'Total Durasi', value: fmtTime(totalTime) },
-                        { label: 'Total Member', value: members.length || selectedClub?.member_count || '-' },
+                        { label: 'Total Member', value: members.length || selectedClub?.member_count || '-', onClick: members.length ? () => setShowMembers(true) : null },
                         { label: 'Total Aktivitas', value: activities.length },
                         { label: 'Avg / Pelari', value: leaderboard.length ? `${(totalDist/leaderboard.length/1000).toFixed(1)} km` : '-' },
                         { label: 'Lari Terjauh', value: `${(longestRun/1000).toFixed(1)} km` },
                         { label: 'Avg / Sesi', value: activities.length ? `${(totalDist/activities.length/1000).toFixed(1)} km` : '-' },
                         { label: 'Avg Pace', value: fmtPace(totalDist, totalTime) },
                         { label: 'Total Elev.', value: `${Math.round(totalElev)} m` },
-                      ].map(s => (
-                        <div key={s.label} className="bg-orange-50 dark:bg-orange-950 rounded-2xl p-3 text-center">
-                          <p className="text-lg font-bold text-orange-500 leading-tight mb-1">{s.value}</p>
-                          <p className="text-xs text-orange-400 font-medium">{s.label}</p>
-                        </div>
-                      ))}
+                      ].map(s => {
+                        const baseClass = 'bg-orange-50 dark:bg-orange-950 rounded-2xl p-3 text-center'
+                        const inner = (
+                          <>
+                            <p className="text-lg font-bold text-orange-500 leading-tight mb-1">{s.value}</p>
+                            <p className="text-xs text-orange-400 font-medium">{s.label}</p>
+                          </>
+                        )
+                        return s.onClick ? (
+                          <button
+                            key={s.label}
+                            type="button"
+                            onClick={s.onClick}
+                            className={`${baseClass} hover:bg-orange-100 dark:hover:bg-orange-900 active:scale-[0.98] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400`}
+                          >
+                            {inner}
+                          </button>
+                        ) : (
+                          <div key={s.label} className={baseClass}>
+                            {inner}
+                          </div>
+                        )
+                      })}
                     </div>
 
                     {leaderboard.length > 0 && (
@@ -710,6 +728,52 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
           </>
         )}
       </main>
+
+      {showMembers && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 px-4 py-6"
+          onClick={() => setShowMembers(false)}
+        >
+          <div
+            className="w-full max-w-lg max-h-[80vh] bg-white dark:bg-gray-900 rounded-2xl shadow-xl flex flex-col overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-800">
+              <div>
+                <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Member</p>
+                <p className="text-xs text-gray-400">{members.length} anggota</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMembers(false)}
+                className="w-8 h-8 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center"
+                aria-label="Tutup"
+              >
+                ✕
+              </button>
+            </div>
+            <ul className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+              {members.map((m, i) => (
+                <li key={`${m.firstname}-${m.lastname}-${i}`} className="flex items-center gap-2 px-4 py-3">
+                  <span className="flex-1 text-sm text-gray-800 dark:text-gray-100 truncate">
+                    {`${m.firstname || ''} ${m.lastname || ''}`.trim() || '—'}
+                  </span>
+                  {m.owner && (
+                    <span className="text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                      Owner
+                    </span>
+                  )}
+                  {m.admin && (
+                    <span className="text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+                      Admin
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
