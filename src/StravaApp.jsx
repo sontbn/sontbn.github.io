@@ -661,8 +661,15 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                             key={s.label}
                             type="button"
                             onClick={s.onClick}
-                            className={`${baseClass} hover:bg-orange-100 dark:hover:bg-orange-900 active:scale-[0.98] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400`}
+                            className={`${baseClass} relative ring-1 ring-orange-200 dark:ring-orange-800/60 hover:bg-orange-100 dark:hover:bg-orange-900 active:scale-[0.98] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400`}
+                            aria-label={`${s.label} — lihat daftar`}
                           >
+                            <span
+                              aria-hidden="true"
+                              className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-orange-500 text-white text-[10px] leading-none flex items-center justify-center shadow-sm"
+                            >
+                              ›
+                            </span>
                             {inner}
                           </button>
                         ) : (
