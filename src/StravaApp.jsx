@@ -538,7 +538,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
             {/* Stats */}
             <div className="grid grid-cols-3 gap-3 mb-5">
               {[
-                { label: 'Pelari', value: leaderboard.length },
+                { label: 'Pelari Aktif', value: leaderboard.length },
                 { label: 'Aktivitas', value: activities.length },
                 { label: 'Total KM', value: Math.round(totalDist / 1000) },
               ].map(s => (
@@ -640,7 +640,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                       {[
                         { label: 'Total Jarak', value: `${(totalDist/1000).toFixed(1)} km` },
                         { label: 'Total Durasi', value: fmtTime(totalTime) },
-                        { label: 'Pelari Aktif', value: leaderboard.length },
+                        { label: 'Total Member', value: members.length || selectedClub?.member_count || '-' },
                         { label: 'Total Aktivitas', value: activities.length },
                         { label: 'Avg / Pelari', value: leaderboard.length ? `${(totalDist/leaderboard.length/1000).toFixed(1)} km` : '-' },
                         { label: 'Lari Terjauh', value: `${(longestRun/1000).toFixed(1)} km` },
