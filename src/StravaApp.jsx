@@ -30,7 +30,10 @@ const getAnthropicKey = () => getStorageValue('anthropic_key') || ''
 
 // ── Cache helpers ─────────────────────────────────────────────
 const PER_PAGE_OPTIONS = [25, 50, 100, 200]
-const DEFAULT_LEADER_PER_PAGE = 200
+const DEFAULT_LEADER_PER_PAGE = 25
+// Insights, top stats, and Rekap totals always read from the largest page
+// so they remain stable as the user switches the leaderboard sub-tab.
+const FULL_PER_PAGE = 200
 
 const todayStr = () => new Date().toISOString().slice(0, 10)
 
@@ -233,7 +236,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
   // ── Fetch insights from Claude and save to cache ──
   const fetchInsights = useCallback(async (byPage, mems, club) => {
-    const lb = buildLeaderboard(byPage[DEFAULT_LEADER_PER_PAGE] || [])
+    const lb = buildLeaderboard(byPage[FULL_PER_PAGE] || [])
     if (lb.length === 0) return
     setInsightsLoading(true)
     setInsightError('')
@@ -400,7 +403,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
   // Top stats, Rekap, and Activities tab use the full (200) set; only the
   // Leaderboard tab varies with the leaderPerPage sub-filter.
-  const activities = activitiesByPage[DEFAULT_LEADER_PER_PAGE] || []
+  const activities = activitiesByPage[FULL_PER_PAGE] || []
   const leaderActivities = activitiesByPage[leaderPerPage] || activities
   const leaderboard = buildLeaderboard(leaderActivities)
   const leaderboardAll = buildLeaderboard(activities)
@@ -589,17 +592,20 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
             {tab === 'leaderboard' && (
               <>
                 {/* Per-page sub-filter — switches which Strava /activities payload feeds the leaderboard */}
-                <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-2xl p-1 mb-3">
-                  {PER_PAGE_OPTIONS.map(n => (
-                    <button key={n} type="button" onClick={() => setLeaderPerPage(n)}
-                      className={`flex-1 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                        leaderPerPage === n
-                          ? 'bg-white dark:bg-gray-700 text-orange-500 shadow-sm'
-                          : 'text-gray-500 dark:text-gray-400'
-                      }`}>
-                      {n}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0">API range page</span>
+                  <div className="flex flex-1 gap-1 bg-gray-100 dark:bg-gray-800 rounded-2xl p-1">
+                    {PER_PAGE_OPTIONS.map(n => (
+                      <button key={n} type="button" onClick={() => setLeaderPerPage(n)}
+                        className={`flex-1 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          leaderPerPage === n
+                            ? 'bg-white dark:bg-gray-700 text-orange-500 shadow-sm'
+                            : 'text-gray-500 dark:text-gray-400'
+                        }`}>
+                        {n}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 {leaderboard.length === 0 ? (
                   <div className="text-center py-12 text-gray-400">
@@ -609,16 +615,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                 ) : (
                   <>
                     {(() => {
-                      if (!hasDates(leaderActivities)) {
-                        return (
-                          <div className="mb-3 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-100 dark:border-amber-900 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
-                            <span>⚠</span>
-                            <span>
-                              Strava club API tidak menyertakan tanggal aktivitas, jadi filter periode tidak bisa diterapkan. Menampilkan {leaderActivities.length} aktivitas terbaru.
-                            </span>
-                          </div>
-                        )
-                      }
+                      if (!hasDates(leaderActivities)) return null
                       const range = dateRange(leaderActivities)
                       if (!range) return null
                       return (
