@@ -29,11 +29,11 @@ function setStorageValue(key, value) {
 const getAnthropicKey = () => getStorageValue('anthropic_key') || ''
 
 // ── Cache helpers ─────────────────────────────────────────────
-const PER_PAGE_OPTIONS = [25, 50, 100, 200]
-const DEFAULT_LEADER_PER_PAGE = 25
-// Insights, top stats, and Rekap totals always read from the largest page
-// so they remain stable as the user switches the leaderboard sub-tab.
-const FULL_PER_PAGE = 200
+// We hit /activities once with per_page=FETCH_PER_PAGE and slice the
+// payload locally for each LAST_N_OPTIONS bucket.
+const FETCH_PER_PAGE = 200
+const LAST_N_OPTIONS = [25, 50, 75, 100]
+const DEFAULT_LAST_N = 25
 
 const todayStr = () => new Date().toISOString().slice(0, 10)
 
@@ -42,17 +42,13 @@ function loadCache() {
   catch { return {} }
 }
 
-function hasAllPages(byPage) {
-  if (!byPage) return false
-  return PER_PAGE_OPTIONS.every(n => Array.isArray(byPage[n]))
-}
-
-// Returns cached entry only if TODAY and FULLY complete (all per_page sets + insights)
+// Returns cached entry only if TODAY and FULLY complete (activities + insights)
 function getCompleteCache(clubId) {
   const c = loadCache()[String(clubId)]
   if (!c || c.date !== todayStr()) return null
+  const hasActivities = Array.isArray(c.activities)
   const hasInsights = Object.keys(c.insights || {}).length > 0
-  return (hasAllPages(c.activitiesByPage) && hasInsights) ? c : null
+  return (hasActivities && hasInsights) ? c : null
 }
 
 // Returns cached entry if today, regardless of completeness
@@ -179,8 +175,8 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   })
   const [clubs, setClubs] = useState([])
   const [selectedClub, setSelectedClub] = useState(null)
-  const [activitiesByPage, setActivitiesByPage] = useState({})
-  const [leaderPerPage, setLeaderPerPage] = useState(DEFAULT_LEADER_PER_PAGE)
+  const [activities, setActivities] = useState([])
+  const [leaderLastN, setLeaderLastN] = useState(DEFAULT_LAST_N)
   const [members, setMembers] = useState([])
   const [insights, setInsights] = useState({})
   const [insightsLoading, setInsightsLoading] = useState(false)
@@ -235,51 +231,35 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   }, [tokens.refreshToken, refreshAccessToken])
 
   // ── Fetch insights from Claude and save to cache ──
-  const fetchInsights = useCallback(async (byPage, mems, club) => {
-    const lb = buildLeaderboard(byPage[FULL_PER_PAGE] || [])
+  const fetchInsights = useCallback(async (acts, mems, club) => {
+    const lb = buildLeaderboard(acts)
     if (lb.length === 0) return
     setInsightsLoading(true)
     setInsightError('')
     try {
       const ins = await generateInsights(lb)
       setInsights(ins)
-      setCachedClub(club.id, { activitiesByPage: byPage, members: mems, insights: ins })
+      setCachedClub(club.id, { activities: acts, members: mems, insights: ins })
     } catch (e) {
       console.warn('Insight error:', e)
       setInsightError(e?.message || 'Gagal mengambil insight AI')
       setInsights({})
-      setCachedClub(club.id, { activitiesByPage: byPage, members: mems, insights: {} })
+      setCachedClub(club.id, { activities: acts, members: mems, insights: {} })
     } finally {
       setInsightsLoading(false)
     }
   }, [])
 
-  // Fan-out: hit /activities once per per_page option in parallel + members in parallel
-  const fetchAllPages = useCallback(async (clubId, at) => {
-    const [memsRes, ...actsResults] = await Promise.allSettled([
-      stravaGet(`/clubs/${clubId}/members?per_page=100`, at),
-      ...PER_PAGE_OPTIONS.map(n => stravaGet(`/clubs/${clubId}/activities?per_page=${n}`, at)),
-    ])
-    const byPage = {}
-    PER_PAGE_OPTIONS.forEach((n, i) => {
-      const r = actsResults[i]
-      byPage[n] = (r.status === 'fulfilled' ? r.value : [])
-        .filter(a => a.type === 'Run' || a.sport_type === 'Run')
-    })
-    const mems = memsRes.status === 'fulfilled' ? memsRes.value : []
-    return { byPage, mems }
-  }, [stravaGet])
-
   // ── Load club data ──
   // Strategy:
-  //   complete cache (all per_page sets + insights) → show instantly, no API call
-  //   partial cache  (all per_page sets, no insights) → show activities, re-call Claude
-  //   no cache or stale shape → fan-out fetch all per_page sets + call Claude
+  //   complete cache (activities + insights) → show instantly, no API call
+  //   partial cache  (activities only)       → show activities, re-call Claude
+  //   no cache                               → fetch Strava + call Claude
   const loadClub = useCallback(async (club, at) => {
     // 1. Complete cache hit → fully from cache
     const complete = getCompleteCache(club.id)
     if (complete) {
-      setActivitiesByPage(complete.activitiesByPage)
+      setActivities(complete.activities)
       setMembers(complete.members)
       setInsights(complete.insights)
       setInsightError('')
@@ -291,24 +271,30 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
     // 2. Partial cache → use cached Strava data, only re-call Claude
     const partial = getPartialCache(club.id)
-    if (hasAllPages(partial?.activitiesByPage)) {
-      setActivitiesByPage(partial.activitiesByPage)
+    if (Array.isArray(partial?.activities)) {
+      setActivities(partial.activities)
       setMembers(partial.members || [])
       setInsights({})
       setInsightError('')
-      await fetchInsights(partial.activitiesByPage, partial.members || [], club)
+      await fetchInsights(partial.activities, partial.members || [], club)
       return
     }
 
-    // 3. Full cache miss → fan-out fetch all per_page sets
-    const { byPage, mems } = await fetchAllPages(club.id, at)
-    setActivitiesByPage(byPage)
+    // 3. Full cache miss → single /activities + /members fetch
+    const [actsRes, memsRes] = await Promise.allSettled([
+      stravaGet(`/clubs/${club.id}/activities?per_page=${FETCH_PER_PAGE}`, at),
+      stravaGet(`/clubs/${club.id}/members?per_page=100`, at),
+    ])
+    const acts = (actsRes.status === 'fulfilled' ? actsRes.value : [])
+      .filter(a => a.type === 'Run' || a.sport_type === 'Run')
+    const mems = memsRes.status === 'fulfilled' ? memsRes.value : []
+    setActivities(acts)
     setMembers(mems)
     setInsightError('')
     // Save Strava data first so partial cache exists even if Claude fails
-    setCachedClub(club.id, { activitiesByPage: byPage, members: mems, insights: {} })
-    await fetchInsights(byPage, mems, club)
-  }, [fetchAllPages, fetchInsights])
+    setCachedClub(club.id, { activities: acts, members: mems, insights: {} })
+    await fetchInsights(acts, mems, club)
+  }, [stravaGet, fetchInsights])
 
   const forceRefreshClub = async () => {
     if (!selectedClub) return
@@ -318,11 +304,17 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     setLoading(true)
     setCacheHit(false)
     try {
-      const { byPage, mems } = await fetchAllPages(selectedClub.id, tokens.accessToken)
-      setActivitiesByPage(byPage)
+      const [actsRes, memsRes] = await Promise.allSettled([
+        stravaGet(`/clubs/${selectedClub.id}/activities?per_page=${FETCH_PER_PAGE}`, tokens.accessToken),
+        stravaGet(`/clubs/${selectedClub.id}/members?per_page=100`, tokens.accessToken),
+      ])
+      const acts = (actsRes.status === 'fulfilled' ? actsRes.value : [])
+        .filter(a => a.type === 'Run' || a.sport_type === 'Run')
+      const mems = memsRes.status === 'fulfilled' ? memsRes.value : []
+      setActivities(acts)
       setMembers(mems)
-      setCachedClub(selectedClub.id, { activitiesByPage: byPage, members: mems, insights: {} })
-      await fetchInsights(byPage, mems, selectedClub)
+      setCachedClub(selectedClub.id, { activities: acts, members: mems, insights: {} })
+      await fetchInsights(acts, mems, selectedClub)
     } catch (e) {
       setError(e?.message || 'Gagal memuat data terbaru')
     } finally {
@@ -394,17 +386,16 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     setShowKeyInput(false)
     if (selectedClub) {
       const partial = getPartialCache(selectedClub.id)
-      const byPage = hasAllPages(partial?.activitiesByPage) ? partial.activitiesByPage : activitiesByPage
+      const acts = partial?.activities || activities
       const mems = partial?.members || members
-      setCachedClub(selectedClub.id, { activitiesByPage: byPage, members: mems, insights: {} })
-      await fetchInsights(byPage, mems, selectedClub)
+      setCachedClub(selectedClub.id, { activities: acts, members: mems, insights: {} })
+      await fetchInsights(acts, mems, selectedClub)
     }
   }
 
-  // Top stats, Rekap, and Activities tab use the full (200) set; only the
-  // Leaderboard tab varies with the leaderPerPage sub-filter.
-  const activities = activitiesByPage[FULL_PER_PAGE] || []
-  const leaderActivities = activitiesByPage[leaderPerPage] || activities
+  // Top stats, Rekap, and Activities tab use the full payload; the
+  // Leaderboard tab slices the latest N activities per the sub-filter.
+  const leaderActivities = activities.slice(0, leaderLastN)
   const leaderboard = buildLeaderboard(leaderActivities)
   const leaderboardAll = buildLeaderboard(activities)
   const medals = ['🥇', '🥈', '🥉']
@@ -591,14 +582,14 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
             {/* Leaderboard */}
             {tab === 'leaderboard' && (
               <>
-                {/* Per-page sub-filter — switches which Strava /activities payload feeds the leaderboard */}
+                {/* Slice the cached /activities payload locally — no extra Strava hits */}
                 <div className="flex items-center gap-2 mb-3">
-                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0">API range page</span>
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0">Last activity</span>
                   <div className="flex flex-1 gap-1 bg-gray-100 dark:bg-gray-800 rounded-2xl p-1">
-                    {PER_PAGE_OPTIONS.map(n => (
-                      <button key={n} type="button" onClick={() => setLeaderPerPage(n)}
+                    {LAST_N_OPTIONS.map(n => (
+                      <button key={n} type="button" onClick={() => setLeaderLastN(n)}
                         className={`flex-1 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                          leaderPerPage === n
+                          leaderLastN === n
                             ? 'bg-white dark:bg-gray-700 text-orange-500 shadow-sm'
                             : 'text-gray-500 dark:text-gray-400'
                         }`}>
