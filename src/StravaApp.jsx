@@ -29,6 +29,9 @@ function setStorageValue(key, value) {
 const getAnthropicKey = () => getStorageValue('anthropic_key') || ''
 
 // ── Cache helpers ─────────────────────────────────────────────
+const PER_PAGE_OPTIONS = [25, 50, 100, 200]
+const DEFAULT_LEADER_PER_PAGE = 200
+
 const todayStr = () => new Date().toISOString().slice(0, 10)
 
 function loadCache() {
@@ -36,13 +39,17 @@ function loadCache() {
   catch { return {} }
 }
 
-// Returns cached entry only if TODAY and FULLY complete (activities + insights)
+function hasAllPages(byPage) {
+  if (!byPage) return false
+  return PER_PAGE_OPTIONS.every(n => Array.isArray(byPage[n]))
+}
+
+// Returns cached entry only if TODAY and FULLY complete (all per_page sets + insights)
 function getCompleteCache(clubId) {
   const c = loadCache()[String(clubId)]
   if (!c || c.date !== todayStr()) return null
-  const hasActivities = (c.activities?.length ?? 0) > 0
   const hasInsights = Object.keys(c.insights || {}).length > 0
-  return (hasActivities && hasInsights) ? c : null
+  return (hasAllPages(c.activitiesByPage) && hasInsights) ? c : null
 }
 
 // Returns cached entry if today, regardless of completeness
@@ -169,7 +176,8 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   })
   const [clubs, setClubs] = useState([])
   const [selectedClub, setSelectedClub] = useState(null)
-  const [activities, setActivities] = useState([])
+  const [activitiesByPage, setActivitiesByPage] = useState({})
+  const [leaderPerPage, setLeaderPerPage] = useState(DEFAULT_LEADER_PER_PAGE)
   const [members, setMembers] = useState([])
   const [insights, setInsights] = useState({})
   const [insightsLoading, setInsightsLoading] = useState(false)
@@ -224,35 +232,51 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   }, [tokens.refreshToken, refreshAccessToken])
 
   // ── Fetch insights from Claude and save to cache ──
-  const fetchInsights = useCallback(async (acts, mems, club) => {
-    const lb = buildLeaderboard(acts)
+  const fetchInsights = useCallback(async (byPage, mems, club) => {
+    const lb = buildLeaderboard(byPage[DEFAULT_LEADER_PER_PAGE] || [])
     if (lb.length === 0) return
     setInsightsLoading(true)
     setInsightError('')
     try {
       const ins = await generateInsights(lb)
       setInsights(ins)
-      setCachedClub(club.id, { activities: acts, members: mems, insights: ins })
+      setCachedClub(club.id, { activitiesByPage: byPage, members: mems, insights: ins })
     } catch (e) {
       console.warn('Insight error:', e)
       setInsightError(e?.message || 'Gagal mengambil insight AI')
       setInsights({})
-      setCachedClub(club.id, { activities: acts, members: mems, insights: {} })
+      setCachedClub(club.id, { activitiesByPage: byPage, members: mems, insights: {} })
     } finally {
       setInsightsLoading(false)
     }
   }, [])
 
+  // Fan-out: hit /activities once per per_page option in parallel + members in parallel
+  const fetchAllPages = useCallback(async (clubId, at) => {
+    const [memsRes, ...actsResults] = await Promise.allSettled([
+      stravaGet(`/clubs/${clubId}/members?per_page=100`, at),
+      ...PER_PAGE_OPTIONS.map(n => stravaGet(`/clubs/${clubId}/activities?per_page=${n}`, at)),
+    ])
+    const byPage = {}
+    PER_PAGE_OPTIONS.forEach((n, i) => {
+      const r = actsResults[i]
+      byPage[n] = (r.status === 'fulfilled' ? r.value : [])
+        .filter(a => a.type === 'Run' || a.sport_type === 'Run')
+    })
+    const mems = memsRes.status === 'fulfilled' ? memsRes.value : []
+    return { byPage, mems }
+  }, [stravaGet])
+
   // ── Load club data ──
   // Strategy:
-  //   complete cache (activities + insights) → show instantly, no API call
-  //   partial cache  (activities only)       → show activities, re-call Claude
-  //   no cache                               → fetch Strava + call Claude
+  //   complete cache (all per_page sets + insights) → show instantly, no API call
+  //   partial cache  (all per_page sets, no insights) → show activities, re-call Claude
+  //   no cache or stale shape → fan-out fetch all per_page sets + call Claude
   const loadClub = useCallback(async (club, at) => {
     // 1. Complete cache hit → fully from cache
     const complete = getCompleteCache(club.id)
     if (complete) {
-      setActivities(complete.activities)
+      setActivitiesByPage(complete.activitiesByPage)
       setMembers(complete.members)
       setInsights(complete.insights)
       setInsightError('')
@@ -264,30 +288,24 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
     // 2. Partial cache → use cached Strava data, only re-call Claude
     const partial = getPartialCache(club.id)
-    if (partial?.activities?.length > 0) {
-      setActivities(partial.activities)
+    if (hasAllPages(partial?.activitiesByPage)) {
+      setActivitiesByPage(partial.activitiesByPage)
       setMembers(partial.members || [])
       setInsights({})
       setInsightError('')
-      await fetchInsights(partial.activities, partial.members || [], club)
+      await fetchInsights(partial.activitiesByPage, partial.members || [], club)
       return
     }
 
-    // 3. Full cache miss → fetch everything
-    const [actsRes, memsRes] = await Promise.allSettled([
-      stravaGet(`/clubs/${club.id}/activities?per_page=200`, at),
-      stravaGet(`/clubs/${club.id}/members?per_page=100`, at),
-    ])
-    const acts = (actsRes.status === 'fulfilled' ? actsRes.value : [])
-      .filter(a => a.type === 'Run' || a.sport_type === 'Run')
-    const mems = memsRes.status === 'fulfilled' ? memsRes.value : []
-    setActivities(acts)
+    // 3. Full cache miss → fan-out fetch all per_page sets
+    const { byPage, mems } = await fetchAllPages(club.id, at)
+    setActivitiesByPage(byPage)
     setMembers(mems)
     setInsightError('')
     // Save Strava data first so partial cache exists even if Claude fails
-    setCachedClub(club.id, { activities: acts, members: mems, insights: {} })
-    await fetchInsights(acts, mems, club)
-  }, [stravaGet, fetchInsights])
+    setCachedClub(club.id, { activitiesByPage: byPage, members: mems, insights: {} })
+    await fetchInsights(byPage, mems, club)
+  }, [fetchAllPages, fetchInsights])
 
   const forceRefreshClub = async () => {
     if (!selectedClub) return
@@ -297,17 +315,11 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     setLoading(true)
     setCacheHit(false)
     try {
-      const [actsRes, memsRes] = await Promise.allSettled([
-        stravaGet(`/clubs/${selectedClub.id}/activities?per_page=200`, tokens.accessToken),
-        stravaGet(`/clubs/${selectedClub.id}/members?per_page=100`, tokens.accessToken),
-      ])
-      const acts = (actsRes.status === 'fulfilled' ? actsRes.value : [])
-        .filter(a => a.type === 'Run' || a.sport_type === 'Run')
-      const mems = memsRes.status === 'fulfilled' ? memsRes.value : []
-      setActivities(acts)
+      const { byPage, mems } = await fetchAllPages(selectedClub.id, tokens.accessToken)
+      setActivitiesByPage(byPage)
       setMembers(mems)
-      setCachedClub(selectedClub.id, { activities: acts, members: mems, insights: {} })
-      await fetchInsights(acts, mems, selectedClub)
+      setCachedClub(selectedClub.id, { activitiesByPage: byPage, members: mems, insights: {} })
+      await fetchInsights(byPage, mems, selectedClub)
     } catch (e) {
       setError(e?.message || 'Gagal memuat data terbaru')
     } finally {
@@ -379,14 +391,19 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     setShowKeyInput(false)
     if (selectedClub) {
       const partial = getPartialCache(selectedClub.id)
-      const acts = partial?.activities || activities
+      const byPage = hasAllPages(partial?.activitiesByPage) ? partial.activitiesByPage : activitiesByPage
       const mems = partial?.members || members
-      setCachedClub(selectedClub.id, { activities: acts, members: mems, insights: {} })
-      await fetchInsights(acts, mems, selectedClub)
+      setCachedClub(selectedClub.id, { activitiesByPage: byPage, members: mems, insights: {} })
+      await fetchInsights(byPage, mems, selectedClub)
     }
   }
 
-  const leaderboard = buildLeaderboard(activities)
+  // Top stats, Rekap, and Activities tab use the full (200) set; only the
+  // Leaderboard tab varies with the leaderPerPage sub-filter.
+  const activities = activitiesByPage[DEFAULT_LEADER_PER_PAGE] || []
+  const leaderActivities = activitiesByPage[leaderPerPage] || activities
+  const leaderboard = buildLeaderboard(leaderActivities)
+  const leaderboardAll = buildLeaderboard(activities)
   const medals = ['🥇', '🥈', '🥉']
   const hasKey = !!getAnthropicKey()
   const totalDist = activities.reduce((s, a) => s + a.distance, 0)
@@ -539,7 +556,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
             {/* Stats */}
             <div className="grid grid-cols-3 gap-3 mb-5">
               {[
-                { label: 'Pelari Aktif', value: leaderboard.length },
+                { label: 'Pelari Aktif', value: leaderboardAll.length },
                 { label: 'Aktivitas', value: activities.length },
                 { label: 'Total KM', value: Math.round(totalDist / 1000) },
               ].map(s => (
@@ -570,61 +587,76 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
             {/* Leaderboard */}
             {tab === 'leaderboard' && (
-              leaderboard.length === 0 ? (
-                <div className="text-center py-12 text-gray-400">
-                  <p className="text-4xl mb-3">🏃</p>
-                  <p className="text-sm">Belum ada data lari dari club ini</p>
+              <>
+                {/* Per-page sub-filter — switches which Strava /activities payload feeds the leaderboard */}
+                <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-2xl p-1 mb-3">
+                  {PER_PAGE_OPTIONS.map(n => (
+                    <button key={n} type="button" onClick={() => setLeaderPerPage(n)}
+                      className={`flex-1 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                        leaderPerPage === n
+                          ? 'bg-white dark:bg-gray-700 text-orange-500 shadow-sm'
+                          : 'text-gray-500 dark:text-gray-400'
+                      }`}>
+                      {n}
+                    </button>
+                  ))}
                 </div>
-              ) : (
-                <>
-                  {(() => {
-                    if (!hasDates(activities)) {
+                {leaderboard.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400">
+                    <p className="text-4xl mb-3">🏃</p>
+                    <p className="text-sm">Belum ada data lari dari club ini</p>
+                  </div>
+                ) : (
+                  <>
+                    {(() => {
+                      if (!hasDates(leaderActivities)) {
+                        return (
+                          <div className="mb-3 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-100 dark:border-amber-900 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
+                            <span>⚠</span>
+                            <span>
+                              Strava club API tidak menyertakan tanggal aktivitas, jadi filter periode tidak bisa diterapkan. Menampilkan {leaderActivities.length} aktivitas terbaru.
+                            </span>
+                          </div>
+                        )
+                      }
+                      const range = dateRange(leaderActivities)
+                      if (!range) return null
                       return (
-                        <div className="mb-3 px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-100 dark:border-amber-900 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
-                          <span>⚠</span>
+                        <div className="mb-3 px-3 py-2 rounded-xl bg-orange-50 dark:bg-orange-950/40 border border-orange-100 dark:border-orange-900 text-xs text-orange-600 dark:text-orange-300 flex items-center gap-2">
+                          <span>📅</span>
                           <span>
-                            Strava club API tidak menyertakan tanggal aktivitas, jadi filter periode tidak bisa diterapkan. Menampilkan {activities.length} aktivitas terbaru.
+                            {leaderActivities.length} aktivitas · <strong>{fmtDate(range.from)} – {fmtDate(range.to)}</strong>
                           </span>
                         </div>
                       )
-                    }
-                    const range = dateRange(activities)
-                    if (!range) return null
-                    return (
-                      <div className="mb-3 px-3 py-2 rounded-xl bg-orange-50 dark:bg-orange-950/40 border border-orange-100 dark:border-orange-900 text-xs text-orange-600 dark:text-orange-300 flex items-center gap-2">
-                        <span>📅</span>
-                        <span>
-                          {activities.length} aktivitas · <strong>{fmtDate(range.from)} – {fmtDate(range.to)}</strong>
-                        </span>
-                      </div>
-                    )
-                  })()}
-                  <div className="space-y-2">
-                    {leaderboard.map((r, i) => (
-                      <div key={r.name} className="flex items-start gap-3 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3.5">
-                        <span className="text-xl w-7 text-center flex-shrink-0 mt-0.5">
-                          {medals[i] ?? <span className="text-sm font-bold text-gray-300 dark:text-gray-600">{i + 1}</span>}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">{r.name}</p>
-                          {insightsLoading ? (
-                            <p className="text-xs text-orange-300 dark:text-orange-700 mt-0.5 italic">✦ Menganalisis...</p>
-                          ) : getInsight(r.name) ? (
-                            <p className="text-xs text-orange-500 dark:text-orange-400 mt-0.5 italic leading-snug">✦ {getInsight(r.name)}</p>
-                          ) : null}
-                          <p className="text-xs text-gray-400 mt-1">
-                            {r.runs}x lari · avg {(r.dist / r.runs / 1000).toFixed(1)} km/sesi · {fmtPace(r.dist, r.time)}
-                          </p>
+                    })()}
+                    <div className="space-y-2">
+                      {leaderboard.map((r, i) => (
+                        <div key={r.name} className="flex items-start gap-3 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3.5">
+                          <span className="text-xl w-7 text-center flex-shrink-0 mt-0.5">
+                            {medals[i] ?? <span className="text-sm font-bold text-gray-300 dark:text-gray-600">{i + 1}</span>}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate">{r.name}</p>
+                            {insightsLoading ? (
+                              <p className="text-xs text-orange-300 dark:text-orange-700 mt-0.5 italic">✦ Menganalisis...</p>
+                            ) : getInsight(r.name) ? (
+                              <p className="text-xs text-orange-500 dark:text-orange-400 mt-0.5 italic leading-snug">✦ {getInsight(r.name)}</p>
+                            ) : null}
+                            <p className="text-xs text-gray-400 mt-1">
+                              {r.runs}x lari · avg {(r.dist / r.runs / 1000).toFixed(1)} km/sesi · {fmtPace(r.dist, r.time)}
+                            </p>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <p className="text-sm font-bold text-orange-500">{(r.dist / 1000).toFixed(1)} km</p>
+                            <p className="text-xs text-gray-400">{fmtTime(r.time)}</p>
+                          </div>
                         </div>
-                        <div className="text-right flex-shrink-0">
-                          <p className="text-sm font-bold text-orange-500">{(r.dist / 1000).toFixed(1)} km</p>
-                          <p className="text-xs text-gray-400">{fmtTime(r.time)}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )
+                      ))}
+                    </div>
+                  </>
+                )}
+              </>
             )}
 
             {/* Recap */}
@@ -643,7 +675,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                         { label: 'Total Durasi', value: fmtTime(totalTime) },
                         { label: 'Total Member', value: members.length || selectedClub?.member_count || '-', onClick: members.length ? () => setShowMembers(true) : null },
                         { label: 'Total Aktivitas', value: activities.length },
-                        { label: 'Avg / Pelari', value: leaderboard.length ? `${(totalDist/leaderboard.length/1000).toFixed(1)} km` : '-' },
+                        { label: 'Avg / Pelari', value: leaderboardAll.length ? `${(totalDist/leaderboardAll.length/1000).toFixed(1)} km` : '-' },
                         { label: 'Lari Terjauh', value: `${(longestRun/1000).toFixed(1)} km` },
                         { label: 'Avg / Sesi', value: activities.length ? `${(totalDist/activities.length/1000).toFixed(1)} km` : '-' },
                         { label: 'Avg Pace', value: fmtPace(totalDist, totalTime) },
@@ -661,8 +693,15 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                             key={s.label}
                             type="button"
                             onClick={s.onClick}
-                            className={`${baseClass} hover:bg-orange-100 dark:hover:bg-orange-900 active:scale-[0.98] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400`}
+                            className={`${baseClass} relative ring-1 ring-orange-200 dark:ring-orange-800/60 hover:bg-orange-100 dark:hover:bg-orange-900 active:scale-[0.98] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-400`}
+                            aria-label={`${s.label} — lihat daftar`}
                           >
+                            <span
+                              aria-hidden="true"
+                              className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-orange-500 text-white text-[10px] leading-none flex items-center justify-center shadow-sm"
+                            >
+                              ›
+                            </span>
                             {inner}
                           </button>
                         ) : (
@@ -673,11 +712,11 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                       })}
                     </div>
 
-                    {leaderboard.length > 0 && (
+                    {leaderboardAll.length > 0 && (
                       <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3">
                         <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-400 mb-2">Top 3 Pelari</p>
                         <div className="space-y-2">
-                          {leaderboard.slice(0, 3).map((r, i) => (
+                          {leaderboardAll.slice(0, 3).map((r, i) => (
                             <div key={r.name} className="flex items-center gap-3">
                               <span className="text-lg w-6 text-center flex-shrink-0">{medals[i]}</span>
                               <p className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-100 truncate">{r.name}</p>
