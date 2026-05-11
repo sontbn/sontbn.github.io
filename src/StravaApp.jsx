@@ -118,6 +118,35 @@ function buildLeaderboard(acts) {
   ).sort((a, b) => b.dist - a.dist)
 }
 
+// ── Sport-type matching ───────────────────────────────────────
+// Strava splits Run/Ride into several sub-types. Match either the
+// preferred `sport_type` field or the deprecated `type` field.
+const RUN_SPORTS = new Set(['Run', 'TrailRun', 'VirtualRun'])
+const RIDE_SPORTS = new Set([
+  'Ride', 'EBikeRide', 'MountainBikeRide', 'GravelRide',
+  'VirtualRide', 'Velomobile', 'Handcycle',
+])
+
+function getClubSport(club) {
+  const types = club?.activity_types
+  if (Array.isArray(types) && types.length > 0) {
+    if (types.every(t => RUN_SPORTS.has(t))) return 'run'
+    if (types.every(t => RIDE_SPORTS.has(t))) return 'ride'
+    return 'other'
+  }
+  // Fallback to deprecated sport_type
+  if (club?.sport_type === 'running') return 'run'
+  if (club?.sport_type === 'cycling') return 'ride'
+  return 'other'
+}
+
+function matchesClubSport(act, clubSport) {
+  const t = act.sport_type || act.type
+  if (clubSport === 'run') return RUN_SPORTS.has(t)
+  if (clubSport === 'ride') return RIDE_SPORTS.has(t)
+  return true
+}
+
 async function sha256Hex(text) {
   const bytes = new TextEncoder().encode(text)
   const hashBuffer = await crypto.subtle.digest('SHA-256', bytes)
@@ -132,7 +161,7 @@ async function generateInsights(leaderboard) {
   if (!key) throw new Error('Anthropic API key belum disimpan')
 
   const lines = leaderboard.map((r, i) =>
-    `${i + 1}. ${r.name}: total ${(r.dist/1000).toFixed(1)}km, ${r.runs}x lari, avg ${(r.dist/r.runs/1000).toFixed(1)}km/sesi, pace ${fmtPace(r.dist, r.time)}, total waktu ${fmtTime(r.time)}`
+    `${i + 1}. ${r.name}: total ${(r.dist/1000).toFixed(1)}km, ${r.runs} sesi, avg ${(r.dist/r.runs/1000).toFixed(1)}km/sesi, pace ${fmtPace(r.dist, r.time)}, total waktu ${fmtTime(r.time)}`
   ).join('\n')
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -148,13 +177,13 @@ async function generateInsights(leaderboard) {
       max_tokens: 1024,
       messages: [{
         role: 'user',
-        content: `Kamu adalah analis performa lari yang ramah. Berikan 1 kalimat insight unik (maks 12 kata, bahasa Indonesia, nada sportif & supportif) untuk setiap pelari. Fokus hal paling menonjol dari masing-masing orang dibanding grup.
+        content: `Kamu adalah analis performa olahraga yang ramah. Berikan 1 kalimat insight unik (maks 12 kata, bahasa Indonesia, nada sportif & supportif) untuk setiap atlet. Fokus hal paling menonjol dari masing-masing orang dibanding grup.
 
-Data pelari:
+Data atlet:
 ${lines}
 
 PENTING: Gunakan nama persis sama (sama persis huruf kapital/kecilnya) seperti di data sebagai key JSON.
-Balas HANYA dengan JSON object: {"Nama Pelari": "kalimat insight", ...}`,
+Balas HANYA dengan JSON object: {"Nama Atlet": "kalimat insight", ...}`,
       }],
     }),
   })
@@ -285,8 +314,9 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
       stravaGet(`/clubs/${club.id}/activities?per_page=${FETCH_PER_PAGE}`, at),
       stravaGet(`/clubs/${club.id}/members?per_page=100`, at),
     ])
+    const clubSport = getClubSport(club)
     const acts = (actsRes.status === 'fulfilled' ? actsRes.value : [])
-      .filter(a => a.type === 'Run' || a.sport_type === 'Run')
+      .filter(a => matchesClubSport(a, clubSport))
     const mems = memsRes.status === 'fulfilled' ? memsRes.value : []
     setActivities(acts)
     setMembers(mems)
@@ -309,7 +339,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
         stravaGet(`/clubs/${selectedClub.id}/members?per_page=100`, tokens.accessToken),
       ])
       const acts = (actsRes.status === 'fulfilled' ? actsRes.value : [])
-        .filter(a => a.type === 'Run' || a.sport_type === 'Run')
+        .filter(a => matchesClubSport(a, getClubSport(selectedClub)))
       const mems = memsRes.status === 'fulfilled' ? memsRes.value : []
       setActivities(acts)
       setMembers(mems)
@@ -550,7 +580,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
             {/* Stats */}
             <div className="grid grid-cols-3 gap-3 mb-5">
               {[
-                { label: 'Pelari Aktif', value: leaderboardAll.length },
+                { label: 'Atlet Aktif', value: leaderboardAll.length },
                 { label: 'Aktivitas', value: activities.length },
                 { label: 'Total KM', value: Math.round(totalDist / 1000) },
               ].map(s => (
@@ -601,7 +631,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                 {leaderboard.length === 0 ? (
                   <div className="text-center py-12 text-gray-400">
                     <p className="text-4xl mb-3">🏃</p>
-                    <p className="text-sm">Belum ada data lari dari club ini</p>
+                    <p className="text-sm">Belum ada data aktivitas dari club ini</p>
                   </div>
                 ) : (
                   <>
@@ -632,7 +662,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                               <p className="text-xs text-orange-500 dark:text-orange-400 mt-0.5 italic leading-snug">✦ {getInsight(r.name)}</p>
                             ) : null}
                             <p className="text-xs text-gray-400 mt-1">
-                              {r.runs}x lari · avg {(r.dist / r.runs / 1000).toFixed(1)} km/sesi · {fmtPace(r.dist, r.time)}
+                              {r.runs} sesi · avg {(r.dist / r.runs / 1000).toFixed(1)} km/sesi · {fmtPace(r.dist, r.time)}
                             </p>
                           </div>
                           <div className="text-right flex-shrink-0">
@@ -663,8 +693,8 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                         { label: 'Total Durasi', value: fmtTime(totalTime) },
                         { label: 'Total Member', value: members.length || selectedClub?.member_count || '-', onClick: members.length ? () => setShowMembers(true) : null },
                         { label: 'Total Aktivitas', value: activities.length },
-                        { label: 'Avg / Pelari', value: leaderboardAll.length ? `${(totalDist/leaderboardAll.length/1000).toFixed(1)} km` : '-' },
-                        { label: 'Lari Terjauh', value: `${(longestRun/1000).toFixed(1)} km` },
+                        { label: 'Avg / Member', value: leaderboardAll.length ? `${(totalDist/leaderboardAll.length/1000).toFixed(1)} km` : '-' },
+                        { label: 'Jarak Terjauh', value: `${(longestRun/1000).toFixed(1)} km` },
                         { label: 'Avg / Sesi', value: activities.length ? `${(totalDist/activities.length/1000).toFixed(1)} km` : '-' },
                         { label: 'Avg Pace', value: fmtPace(totalDist, totalTime) },
                         { label: 'Total Elev.', value: `${Math.round(totalElev)} m` },
@@ -702,7 +732,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
 
                     {leaderboardAll.length > 0 && (
                       <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3">
-                        <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-400 mb-2">Top 3 Pelari</p>
+                        <p className="text-[10px] uppercase tracking-wider font-semibold text-gray-400 mb-2">Top 3</p>
                         <div className="space-y-2">
                           {leaderboardAll.slice(0, 3).map((r, i) => (
                             <div key={r.name} className="flex items-center gap-3">
