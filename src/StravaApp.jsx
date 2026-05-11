@@ -30,9 +30,15 @@ const getAnthropicKey = () => getStorageValue('anthropic_key') || ''
 
 // ── Cache helpers ─────────────────────────────────────────────
 // We hit /activities once with per_page=FETCH_PER_PAGE and slice the
-// payload locally for each LAST_N_OPTIONS bucket.
+// payload locally per LAST_N_OPTIONS. The last bucket inverts the slice
+// to show only activities beyond the first 75.
 const FETCH_PER_PAGE = 200
-const LAST_N_OPTIONS = [25, 50, 75, 100]
+const LAST_N_OPTIONS = [
+  { id: 25, label: '25', start: 0, end: 25 },
+  { id: 50, label: '50', start: 0, end: 50 },
+  { id: 75, label: '75', start: 0, end: 75 },
+  { id: 'over75', label: '> 75', start: 75, end: undefined },
+]
 const DEFAULT_LAST_N = 25
 
 const todayStr = () => new Date().toISOString().slice(0, 10)
@@ -424,8 +430,9 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   }
 
   // Top stats, Rekap, and Activities tab use the full payload; the
-  // Leaderboard tab slices the latest N activities per the sub-filter.
-  const leaderActivities = activities.slice(0, leaderLastN)
+  // Leaderboard tab slices the activities per the sub-filter bucket.
+  const leaderBucket = LAST_N_OPTIONS.find(o => o.id === leaderLastN) || LAST_N_OPTIONS[0]
+  const leaderActivities = activities.slice(leaderBucket.start, leaderBucket.end)
   const leaderboard = buildLeaderboard(leaderActivities)
   const leaderboardAll = buildLeaderboard(activities)
   const medals = ['🥇', '🥈', '🥉']
@@ -616,14 +623,14 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0">Last activity</span>
                   <div className="flex flex-1 gap-1 bg-gray-100 dark:bg-gray-800 rounded-2xl p-1">
-                    {LAST_N_OPTIONS.map(n => (
-                      <button key={n} type="button" onClick={() => setLeaderLastN(n)}
+                    {LAST_N_OPTIONS.map(opt => (
+                      <button key={opt.id} type="button" onClick={() => setLeaderLastN(opt.id)}
                         className={`flex-1 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                          leaderLastN === n
+                          leaderLastN === opt.id
                             ? 'bg-white dark:bg-gray-700 text-orange-500 shadow-sm'
                             : 'text-gray-500 dark:text-gray-400'
                         }`}>
-                        {n}
+                        {opt.label}
                       </button>
                     ))}
                   </div>
