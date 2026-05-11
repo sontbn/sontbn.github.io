@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import seedEvents from './data/events.json'
 
 const CLIENT_ID = '228902'
 const CLIENT_SECRET = '1524991602a55e9de6aed5ba03535e3b2b7d42fb'
@@ -202,6 +203,157 @@ Balas HANYA dengan JSON object: {"Nama Atlet": "kalimat insight", ...}`,
   return JSON.parse(match[0])
 }
 
+// ── Events helpers ────────────────────────────────────────────
+const EVENTS_OVERLAY_KEY = 'strava_events_overlay'
+const EVENT_FIELDS_DEFAULT = {
+  id: '',
+  name: '',
+  sport: 'other',
+  date: null,
+  endDate: null,
+  city: '',
+  province: '',
+  country: 'Indonesia',
+  venue: null,
+  categories: [],
+  registrationCloseDate: null,
+  priceRangeIdr: null,
+  organizer: null,
+  url: null,
+  description: '',
+  source: '',
+  fetchedAt: null,
+}
+
+function slugify(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80)
+}
+
+function normalizeEvent(raw) {
+  const merged = { ...EVENT_FIELDS_DEFAULT, ...raw }
+  if (!merged.id) merged.id = slugify(`${merged.name}-${merged.date}`)
+  merged.categories = Array.isArray(merged.categories) ? merged.categories : []
+  return merged
+}
+
+function loadEventsOverlay() {
+  try {
+    const raw = localStorage.getItem(EVENTS_OVERLAY_KEY)
+    if (!raw) return { events: [], lastFetchedAt: null }
+    const parsed = JSON.parse(raw)
+    return {
+      events: Array.isArray(parsed.events) ? parsed.events : [],
+      lastFetchedAt: parsed.lastFetchedAt || null,
+    }
+  } catch { return { events: [], lastFetchedAt: null } }
+}
+
+function saveEventsOverlay(payload) {
+  localStorage.setItem(EVENTS_OVERLAY_KEY, JSON.stringify(payload))
+}
+
+function mergeEvents(seed, overlay) {
+  const byId = new Map()
+  for (const e of (seed?.events || [])) byId.set(e.id, normalizeEvent(e))
+  for (const e of (overlay?.events || [])) byId.set(e.id, normalizeEvent(e))
+  return Array.from(byId.values())
+}
+
+function isUpcoming(ev, todayIso) {
+  if (!ev.date) return false
+  return ev.date >= todayIso
+}
+
+function filterEventsForSport(events, clubSport) {
+  if (clubSport === 'run') return events.filter(e => e.sport === 'run')
+  if (clubSport === 'ride') return events.filter(e => e.sport === 'ride')
+  return events
+}
+
+// Call Claude with the server-side web_search tool to discover upcoming
+// Indonesian events in the next 3 months for the given sport.
+async function searchEvents(clubSport) {
+  const key = getAnthropicKey()
+  if (!key) throw new Error('Anthropic API key belum disimpan')
+
+  const today = new Date()
+  const threeMonths = new Date()
+  threeMonths.setMonth(threeMonths.getMonth() + 3)
+  const fmt = d => d.toISOString().slice(0, 10)
+  const todayIso = fmt(today)
+  const limitIso = fmt(threeMonths)
+  const sportLabel = clubSport === 'run'
+    ? 'lari (running, half marathon, marathon, fun run, trail run)'
+    : clubSport === 'ride'
+      ? 'sepeda (cycling, gowes, gran fondo, fun ride, MTB)'
+      : 'olahraga (running atau cycling)'
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+      messages: [{
+        role: 'user',
+        content: `Cari event ${sportLabel} yang akan diadakan di Indonesia antara ${todayIso} dan ${limitIso}. Sertakan minimal 10 event jika tersedia.
+
+Untuk setiap event, kumpulkan field berikut. Kalau tidak diketahui, isi null (atau "" untuk string kosong, [] untuk array kosong).
+
+- id: slug unik (kebab-case dari nama + tahun)
+- name: nama event lengkap
+- sport: "run" atau "ride"
+- date: tanggal mulai YYYY-MM-DD
+- endDate: tanggal akhir YYYY-MM-DD atau null
+- city: kota
+- province: provinsi
+- country: "Indonesia"
+- venue: lokasi spesifik / titik start atau null
+- categories: array kategori, mis. ["5K","10K","21K","42K"] atau ["Fun Ride 30K","Gran Fondo 100K"]
+- registrationCloseDate: deadline pendaftaran YYYY-MM-DD atau null
+- priceRangeIdr: kisaran harga IDR mis. "150rb-500rb" atau null
+- organizer: penyelenggara atau null
+- url: link resmi/pendaftaran atau null
+- description: deskripsi singkat 1 kalimat atau ""
+- source: domain sumber utama, mis. "racecalendar.id"
+
+PENTING:
+- date HARUS antara ${todayIso} dan ${limitIso}.
+- Tidak ada event yang sudah lewat.
+- Output HANYA JSON array di dalam fence \`\`\`json ... \`\`\`. Tanpa teks lain di luar fence.`,
+      }],
+    }),
+  })
+
+  if (!res.ok) throw new Error(`Claude API ${res.status}`)
+  const data = await res.json()
+  const text = data?.content?.map(p => p?.text ?? '').join('\n').trim() || ''
+  const fenceMatch = text.match(/```json\s*([\s\S]+?)```/i)
+  const raw = fenceMatch ? fenceMatch[1] : (text.match(/\[[\s\S]+\]/)?.[0] || '')
+  if (!raw) throw new Error('Respons Claude tidak berisi JSON array')
+  const arr = JSON.parse(raw)
+  if (!Array.isArray(arr)) throw new Error('Respons bukan array')
+  const now = new Date().toISOString()
+  return arr.map(r => normalizeEvent({ ...r, source: r.source || 'anthropic-web-search', fetchedAt: now }))
+}
+
+function fmtEventDate(iso) {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
 // ── Main component ────────────────────────────────────────────
 export default function StravaApp({ onBack, dark, onToggleDark }) {
   const [tokens, setTokens] = useState(() => {
@@ -227,6 +379,9 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   const [pinError, setPinError] = useState('')
   const [forceGetLoading, setForceGetLoading] = useState(false)
   const [showMembers, setShowMembers] = useState(false)
+  const [eventsOverlay, setEventsOverlay] = useState(() => loadEventsOverlay())
+  const [eventsRefreshing, setEventsRefreshing] = useState(false)
+  const [eventsError, setEventsError] = useState('')
 
   // Case-insensitive insight lookup — guards against Claude changing capitalisation
   const getInsight = (name) => {
@@ -442,6 +597,37 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   const totalElev = activities.reduce((s, a) => s + (a.total_elevation_gain || 0), 0)
   const longestRun = activities.reduce((m, a) => Math.max(m, a.distance), 0)
 
+  // Events: merge committed seed (src/data/events.json) with localStorage overlay,
+  // filter to club sport + upcoming, sort by date ascending.
+  const clubSport = getClubSport(selectedClub)
+  const todayIso = new Date().toISOString().slice(0, 10)
+  const allEvents = mergeEvents(seedEvents, eventsOverlay)
+  const eventsForClub = filterEventsForSport(allEvents, clubSport)
+    .filter(e => isUpcoming(e, todayIso))
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+
+  const refreshEvents = async () => {
+    setEventsRefreshing(true)
+    setEventsError('')
+    try {
+      const found = await searchEvents(clubSport)
+      // Upsert: merge into the existing localStorage overlay by id
+      const current = loadEventsOverlay()
+      const byId = new Map((current.events || []).map(e => [e.id, e]))
+      for (const e of found) byId.set(e.id, e)
+      const nextOverlay = {
+        events: Array.from(byId.values()),
+        lastFetchedAt: new Date().toISOString(),
+      }
+      saveEventsOverlay(nextOverlay)
+      setEventsOverlay(nextOverlay)
+    } catch (e) {
+      setEventsError(e?.message || 'Gagal mencari event')
+    } finally {
+      setEventsRefreshing(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 transition-colors duration-300">
       {/* Header */}
@@ -604,9 +790,10 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                 { id: 'leaderboard', label: '🏆 Leaderboard' },
                 { id: 'recap', label: '📊 Rekap' },
                 { id: 'activities', label: '🕐 Aktivitas' },
+                { id: 'events', label: '📅 Events' },
               ].map(t => (
                 <button key={t.id} onClick={() => setTab(t.id)}
-                  className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${
+                  className={`flex-1 py-2 rounded-xl text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${
                     tab === t.id
                       ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
                       : 'text-gray-500 dark:text-gray-400'
@@ -788,6 +975,97 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                   ))}
                 </div>
               )
+            )}
+
+            {/* Events */}
+            {tab === 'events' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-400">
+                      {eventsOverlay.lastFetchedAt
+                        ? `Update terakhir: ${fmtEventDate(eventsOverlay.lastFetchedAt.slice(0,10))}`
+                        : 'Belum pernah di-refresh dari browser ini'}
+                    </p>
+                    <p className="text-[10px] text-gray-400">
+                      {eventsForClub.length} event {clubSport === 'run' ? 'lari' : clubSport === 'ride' ? 'sepeda' : ''} · 3 bulan ke depan
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={refreshEvents}
+                    disabled={eventsRefreshing || !hasKey}
+                    className="px-3 py-2 rounded-xl text-xs font-semibold bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5 flex-shrink-0"
+                  >
+                    {eventsRefreshing ? '⏳ Mencari...' : '🔄 Refresh via AI'}
+                  </button>
+                </div>
+
+                {eventsError && (
+                  <div className="bg-red-50 dark:bg-red-950 border border-red-100 dark:border-red-900 rounded-2xl p-3 text-xs text-red-500">
+                    {eventsError}
+                  </div>
+                )}
+
+                {eventsForClub.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400">
+                    <p className="text-4xl mb-3">📅</p>
+                    <p className="text-sm">Belum ada data event</p>
+                    {hasKey && (
+                      <p className="text-xs text-gray-400 mt-1">Tap "Refresh via AI" untuk mencari</p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {eventsForClub.map(ev => (
+                      <div key={ev.id} className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3">
+                        <div className="flex items-start justify-between gap-2 mb-1">
+                          <p className="text-sm font-semibold text-gray-800 dark:text-gray-100 flex-1 min-w-0">
+                            {ev.name}
+                          </p>
+                          <span className="text-xs font-bold text-orange-500 flex-shrink-0">
+                            {fmtEventDate(ev.date)}
+                          </span>
+                        </div>
+                        {(ev.city || ev.province) && (
+                          <p className="text-xs text-gray-500 mb-1.5">
+                            📍 {[ev.city, ev.province].filter(Boolean).join(', ')}
+                          </p>
+                        )}
+                        {ev.categories?.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mb-1.5">
+                            {ev.categories.map((c, i) => (
+                              <span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-50 dark:bg-orange-950 text-orange-600 dark:text-orange-400 font-medium">
+                                {c}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {ev.description && (
+                          <p className="text-xs text-gray-500 mb-1.5 leading-snug">{ev.description}</p>
+                        )}
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-400">
+                          {ev.organizer && <span>👤 {ev.organizer}</span>}
+                          {ev.priceRangeIdr && <span>💵 Rp {ev.priceRangeIdr}</span>}
+                          {ev.registrationCloseDate && (
+                            <span>⏰ daftar s/d {fmtEventDate(ev.registrationCloseDate)}</span>
+                          )}
+                        </div>
+                        {ev.url && (
+                          <a
+                            href={ev.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-block mt-2 text-xs text-orange-500 hover:text-orange-600 font-semibold"
+                          >
+                            Detail →
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </>
         )}
