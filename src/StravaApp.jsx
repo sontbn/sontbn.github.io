@@ -382,6 +382,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
   const [eventsOverlay, setEventsOverlay] = useState(() => loadEventsOverlay())
   const [eventsRefreshing, setEventsRefreshing] = useState(false)
   const [eventsError, setEventsError] = useState('')
+  const [activitySearch, setActivitySearch] = useState('')
 
   // Case-insensitive insight lookup — guards against Claude changing capitalisation
   const getInsight = (name) => {
@@ -950,31 +951,67 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                   <p className="text-4xl mb-3">🏃</p>
                   <p className="text-sm">Belum ada aktivitas</p>
                 </div>
-              ) : (
-                <div className="space-y-2">
-                  {activities.map((act, i) => (
-                    <div key={i} className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3">
-                      <div className="flex items-center justify-between mb-0.5">
-                        <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">
-                          {act.athlete.firstname} {act.athlete.lastname}
-                        </p>
-                        {act.start_date_local && (
-                          <span className="text-xs text-gray-400 ml-2 flex-shrink-0">{fmtDate(act.start_date_local)}</span>
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-400 mb-2 truncate">{act.name}</p>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-                        <span className="font-bold text-orange-500">{fmtDist(act.distance)}</span>
-                        <span className="text-gray-500">⏱ {fmtTime(act.moving_time)}</span>
-                        <span className="text-gray-500">⚡ {fmtPace(act.distance, act.moving_time)}</span>
-                        {act.total_elevation_gain > 0 && (
-                          <span className="text-gray-500">↗ {Math.round(act.total_elevation_gain)}m</span>
-                        )}
-                      </div>
+              ) : (() => {
+                const q = activitySearch.trim().toLowerCase()
+                const filtered = q
+                  ? activities.filter(act => {
+                      const name = `${act.athlete?.firstname || ''} ${act.athlete?.lastname || ''}`.trim().toLowerCase()
+                      return name.includes(q)
+                    })
+                  : activities
+                return (
+                  <div className="space-y-2">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={activitySearch}
+                        onChange={e => setActivitySearch(e.target.value)}
+                        placeholder="Cari nama atlet..."
+                        className="w-full pl-9 pr-9 py-2 rounded-2xl text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-800 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:border-orange-400"
+                      />
+                      <span aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span>
+                      {activitySearch && (
+                        <button
+                          type="button"
+                          onClick={() => setActivitySearch('')}
+                          aria-label="Clear pencarian"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center justify-center"
+                        >
+                          ✕
+                        </button>
+                      )}
                     </div>
-                  ))}
-                </div>
-              )
+                    {filtered.length === 0 ? (
+                      <div className="text-center py-10 text-gray-400">
+                        <p className="text-3xl mb-2">🔍</p>
+                        <p className="text-sm">Tidak ada atlet yang cocok</p>
+                      </div>
+                    ) : (
+                      filtered.map((act, i) => (
+                        <div key={i} className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-2xl px-4 py-3">
+                          <div className="flex items-center justify-between mb-0.5">
+                            <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                              {act.athlete.firstname} {act.athlete.lastname}
+                            </p>
+                            {act.start_date_local && (
+                              <span className="text-xs text-gray-400 ml-2 flex-shrink-0">{fmtDate(act.start_date_local)}</span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-400 mb-2 truncate">{act.name}</p>
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                            <span className="font-bold text-orange-500">{fmtDist(act.distance)}</span>
+                            <span className="text-gray-500">⏱ {fmtTime(act.moving_time)}</span>
+                            <span className="text-gray-500">⚡ {fmtPace(act.distance, act.moving_time)}</span>
+                            {act.total_elevation_gain > 0 && (
+                              <span className="text-gray-500">↗ {Math.round(act.total_elevation_gain)}m</span>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )
+              })()
             )}
 
             {/* Events */}
