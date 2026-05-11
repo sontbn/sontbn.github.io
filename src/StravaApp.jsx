@@ -37,7 +37,7 @@ const LAST_N_OPTIONS = [
   { id: 25, label: '25', start: 0, end: 25 },
   { id: 50, label: '50', start: 0, end: 50 },
   { id: 75, label: '75', start: 0, end: 75 },
-  { id: 'over75', label: '> 75', start: 75, end: undefined },
+  { id: 'over75', label: '> 75', start: 0, end: 999 },
 ]
 const DEFAULT_LAST_N = 25
 
