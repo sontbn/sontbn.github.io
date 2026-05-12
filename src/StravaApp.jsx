@@ -40,7 +40,7 @@ const LAST_N_OPTIONS = [
   { id: 75, label: '75', start: 0, end: 75 },
   { id: 'over75', label: '> 75', start: 0, end: 999 },
 ]
-const DEFAULT_LAST_N = 25
+const DEFAULT_LAST_N = 50
 
 const todayStr = () => new Date().toISOString().slice(0, 10)
 
