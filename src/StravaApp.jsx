@@ -94,6 +94,20 @@ function fmtPace(distance, seconds) {
     : `${m}:${String(s).padStart(2, '0')} /km`
 }
 
+// Compute speed in kph (km per hour) for cycling activities
+function fmtSpeed(distance, seconds) {
+  if (!distance || distance < 1 || !seconds || seconds <= 0) return '-'
+  const hours = seconds / 3600
+  const kph = (distance / 1000) / hours
+  if (!Number.isFinite(kph)) return '-'
+  return `${kph.toFixed(1)} kpj`
+}
+
+// Helper to get the appropriate speed/pace format based on club sport
+function fmtSpeedOrPace(distance, seconds, clubSport) {
+  return clubSport === 'ride' ? fmtSpeed(distance, seconds) : fmtPace(distance, seconds)
+}
+
 // Strava's /clubs/{id}/activities endpoint omits start_date_local entirely,
 // so any date-based logic must degrade gracefully when the field is missing.
 function hasDates(acts) {
@@ -163,12 +177,12 @@ async function sha256Hex(text) {
 }
 
 // ── Claude insight generator ──────────────────────────────────
-async function generateInsights(leaderboard) {
+async function generateInsights(leaderboard, clubSport) {
   const key = getAnthropicKey()
   if (!key) throw new Error('Anthropic API key belum disimpan')
 
   const lines = leaderboard.map((r, i) =>
-    `${i + 1}. ${r.name}: total ${(r.dist/1000).toFixed(1)}km, ${r.runs} sesi, avg ${(r.dist/r.runs/1000).toFixed(1)}km/sesi, pace ${fmtPace(r.dist, r.time)}, total waktu ${fmtTime(r.time)}`
+    `${i + 1}. ${r.name}: total ${(r.dist/1000).toFixed(1)}km, ${r.runs} sesi, avg ${(r.dist/r.runs/1000).toFixed(1)}km/sesi, pace ${fmtSpeedOrPace(r.dist, r.time, clubSport)}, total waktu ${fmtTime(r.time)}`
   ).join('\n')
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -428,7 +442,8 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
     setInsightsLoading(true)
     setInsightError('')
     try {
-      const ins = await generateInsights(lb)
+      const clubSport = getClubSport(club)
+      const ins = await generateInsights(lb, clubSport)
       setInsights(ins)
       setCachedClub(club.id, { activities: acts, members: mems, insights: ins })
     } catch (e) {
@@ -857,7 +872,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                               <p className="text-xs text-orange-500 dark:text-orange-400 mt-0.5 italic leading-snug">✦ {getInsight(r.name)}</p>
                             ) : null}
                             <p className="text-xs text-gray-400 mt-1">
-                              {r.runs} sesi · avg {(r.dist / r.runs / 1000).toFixed(1)} km/sesi · {fmtPace(r.dist, r.time)}
+                              {r.runs} sesi · avg {(r.dist / r.runs / 1000).toFixed(1)} km/sesi · {fmtSpeedOrPace(r.dist, r.time, clubSport)}
                             </p>
                           </div>
                           <div className="text-right flex-shrink-0">
@@ -891,7 +906,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                         { label: 'Avg / Member', value: leaderboardAll.length ? `${(totalDist/leaderboardAll.length/1000).toFixed(1)} km` : '-' },
                         { label: 'Jarak Terjauh', value: `${(longestRun/1000).toFixed(1)} km` },
                         { label: 'Avg / Sesi', value: activities.length ? `${(totalDist/activities.length/1000).toFixed(1)} km` : '-' },
-                        { label: 'Avg Pace', value: fmtPace(totalDist, totalTime) },
+                        { label: clubSport === 'ride' ? 'Avg Speed' : 'Avg Pace', value: fmtSpeedOrPace(totalDist, totalTime, clubSport) },
                         { label: 'Total Elev.', value: `${Math.round(totalElev)} m` },
                       ].map(s => {
                         const baseClass = 'bg-orange-50 dark:bg-orange-950 rounded-2xl p-3 text-center'
@@ -1001,7 +1016,7 @@ export default function StravaApp({ onBack, dark, onToggleDark }) {
                           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
                             <span className="font-bold text-orange-500">{fmtDist(act.distance)}</span>
                             <span className="text-gray-500">⏱ {fmtTime(act.moving_time)}</span>
-                            <span className="text-gray-500">⚡ {fmtPace(act.distance, act.moving_time)}</span>
+                            <span className="text-gray-500">⚡ {fmtSpeedOrPace(act.distance, act.moving_time, clubSport)}</span>
                             {act.total_elevation_gain > 0 && (
                               <span className="text-gray-500">↗ {Math.round(act.total_elevation_gain)}m</span>
                             )}
