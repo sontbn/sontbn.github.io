@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+# TODO_CONTENT: Add a Sitemap directive after the production domain is confirmed.
