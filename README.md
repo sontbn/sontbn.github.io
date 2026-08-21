@@ -1,16 +1,24 @@
-# React + Vite
+# Sonatha MTT — Portfolio
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Static personal portfolio built with React, TypeScript, Vite, Tailwind CSS v4, and Lucide React.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev
+```
 
-## React Compiler
+## Quality checks
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+npm run check
+```
 
-## Expanding the ESLint configuration
+## Content
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Portfolio content is intentionally centralised in `src/data/`. Search for `TODO_CONTENT` before publishing a project case study or note. The public résumé file is located at `public/Sonatha_MTT_CV_ATS.pdf`.
+
+## Deployment
+
+The included GitHub Actions workflow deploys the production build to GitHub Pages when `main` is updated.
